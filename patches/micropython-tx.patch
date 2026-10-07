@@ -199,10 +199,10 @@ index 0000000..1cdd102
 +target_link_libraries(usermod INTERFACE usermod_pico_tx)
 diff --git a/ports/rp2/tx/modpico_tx.c b/ports/rp2/tx/modpico_tx.c
 new file mode 100644
-index 0000000..089ba51
+index 0000000..4ef5925
 --- /dev/null
 +++ b/ports/rp2/tx/modpico_tx.c
-@@ -0,0 +1,775 @@
+@@ -0,0 +1,782 @@
 +/*
 + * modpico_tx.c
 + *
@@ -763,6 +763,12 @@ index 0000000..089ba51
 +}
 +static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_mode_obj, mod_pico_tx_mode);
 +
++// pico_tx.running() -> True while the modulation engine is started
++static mp_obj_t mod_pico_tx_running(void) {
++    return mp_obj_new_bool(tx_modulator_running());
++}
++static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_running_obj, mod_pico_tx_running);
++
 +static mp_obj_t mod_pico_tx_start(void) {
 +    tx_modulator_start();
 +    return mp_const_none;
@@ -950,6 +956,7 @@ index 0000000..089ba51
 +    // General transmit schemes.
 +    { MP_ROM_QSTR(MP_QSTR_set_mode), MP_ROM_PTR(&mod_pico_tx_set_mode_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_mode), MP_ROM_PTR(&mod_pico_tx_mode_obj) },
++    { MP_ROM_QSTR(MP_QSTR_running), MP_ROM_PTR(&mod_pico_tx_running_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_start), MP_ROM_PTR(&mod_pico_tx_start_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_stop), MP_ROM_PTR(&mod_pico_tx_stop_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_tone), MP_ROM_PTR(&mod_pico_tx_tone_obj) },
@@ -1621,10 +1628,10 @@ index 0000000..a58875f
 +#endif // _PICO_FRACTIONAL_PLL_H
 diff --git a/ports/rp2/tx/tx_modulator.c b/ports/rp2/tx/tx_modulator.c
 new file mode 100644
-index 0000000..321458d
+index 0000000..f5143f5
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.c
-@@ -0,0 +1,1394 @@
+@@ -0,0 +1,1403 @@
 +/*
 + * tx_modulator.c
 + *
@@ -1736,6 +1743,7 @@ index 0000000..321458d
 +static bool s_led_pwm_ready;
 +static volatile uint32_t s_isr_ticks;   // 48kHz ISR invocation counter
 +static volatile uint32_t s_rx_frames;   // mono frames enqueued by the RX path
++static volatile bool s_running;         // the 48kHz modulation engine is started
 +
 +static void tx_led_configure(void);
 +static void tx_led_apply(void);
@@ -2098,9 +2106,11 @@ index 0000000..321458d
 +    irq_set_enabled(PWM_IRQ_WRAP, true);
 +
 +    pwm_set_enabled(TX_PWM_SLICE, true);
++    s_running = true;
 +}
 +
 +static void tx_pwm_stop(void) {
++    s_running = false;
 +    irq_set_enabled(PWM_IRQ_WRAP, false);
 +    pwm_set_irq_enabled(TX_PWM_SLICE, false);
 +    pwm_set_enabled(TX_PWM_SLICE, false);
@@ -2147,6 +2157,7 @@ index 0000000..321458d
 +    s_led_pin = TX_LED_PIN;
 +    s_isr_ticks = 0;
 +    s_rx_frames = 0;
++    s_running = false;
 +
 +    // General transmit-scheme state.
 +    s_scheme = TX_MOD_FM;
@@ -2224,6 +2235,11 @@ index 0000000..321458d
 +
 +uint8_t tx_modulator_scheme(void) {
 +    return s_scheme;
++}
++
++// True while the 48kHz modulation engine (PWM ISR) is running.
++bool tx_modulator_running(void) {
++    return s_running;
 +}
 +
 +void tx_modulator_start(void) {
@@ -3021,10 +3037,10 @@ index 0000000..321458d
 +#endif // MICROPY_HW_TX
 diff --git a/ports/rp2/tx/tx_modulator.h b/ports/rp2/tx/tx_modulator.h
 new file mode 100644
-index 0000000..e8d60bb
+index 0000000..cb57889
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.h
-@@ -0,0 +1,223 @@
+@@ -0,0 +1,226 @@
 +/*
 + * tx_modulator.h
 + *
@@ -3093,6 +3109,9 @@ index 0000000..e8d60bb
 +// tx_modulator_start()/stop().  Switching scheme resets the per-scheme state.
 +void tx_modulator_set_scheme(uint8_t scheme);
 +uint8_t tx_modulator_scheme(void);
++
++// True while the 48kHz modulation engine (PWM ISR) is running.
++bool tx_modulator_running(void);
 +
 +// Start/stop the 48 kHz sample-clock interrupt (the modulation engine).
 +// FM also requires the host to have selected a non-zero alternate setting.

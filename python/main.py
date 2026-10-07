@@ -24,7 +24,7 @@ VERSION = "0.1.0"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
 # (release/firmware/picotx_firmware.uf2).  Shown by `ver`.
-FW_SHA256 = "4bda0613f4e2622db89090723ee6eca7ad8acae96e1af580e5ff71dd9fc856ab"
+FW_SHA256 = "8c085b5a6ba900026ef6b9fdfbf55078e3ab989838c4f10b9103b2e8d8f9dc2b"
 
 # Project links shown by the `ver` command.
 PROJECT_URL = "https://git.sr.ht/~bytewolf/rp2040-fm-transmitter"
@@ -740,12 +740,23 @@ def show_status():
     cf = pico_tx.current_freq()
     print("----- pico-tx status -----")
     print("PLL ready      : %s" % ("yes" if pico_tx.ready() else "NO"))
+    print("TX engine      : %s" % ("running" if pico_tx.running() else "stopped"))
     print("Mode           : %s" % pico_tx.mode())
     if pico_tx.mode() == "tone":
         print("Tone           : %s" % ("%d Hz" % pico_tx.tone_hz() if pico_tx.tone_on() else "off"))
-    elif pico_tx.mode() in ("fsk", "ook", "psk"):
-        print("Symbols queue  : %d pending" % pico_tx.pending())
-    print("RF output      : %s (GPIO%d)" % ("ON" if RF_ON else "OFF", RF_PIN))
+    elif pico_tx.mode() in ("fsk", "ook", "cw", "psk"):
+        rep = pico_tx.repeat()
+        print("Symbols        : %d queued (repeat %s)"
+              % (pico_tx.pending(), "forever" if rep == 0 else ("x%d" % rep)))
+    if not RF_ON:
+        rf_txt = "OFF (rf off)"
+    elif not pico_tx.running():
+        rf_txt = "OFF (engine stopped)"
+    elif pico_tx.rf_gated():
+        rf_txt = "ON - keyed off now"
+    else:
+        rf_txt = "ON"
+    print("RF output      : %s (GPIO%d)" % (rf_txt, RF_PIN))
     if HARMONIC > 1:
         print("Carrier        : %.3f MHz effective (fundamental %.3f MHz x%d)"
               % (TARGET_FREQ / 1e6, pico_tx.carrier() / 1e6, HARMONIC))
