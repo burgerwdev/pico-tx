@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Build output (build.sh clones MicroPython and builds here)
+build_tmp/
+
+# Firmware artifacts (prebuilt UF2 is intentionally tracked)
+firmware/*.uf2.bak
+firmware/sha256.txt.tmp
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Tooling
+*.log
+
+# pi goal/session state
+.pi/

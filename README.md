@@ -1,0 +1,171 @@
+# RP2040 FM Transmitter
+
+**Version 0.24.0** — MicroPython USB sound card + FM transmitter
+
+[中文](README.zh.md) · English · [Project](https://git.sr.ht/~bytewolf/rp2040-fm-transmitter)
+
+Turn a Raspberry Pi Pico (RP2040) into a **USB sound card + FM transmitter**:
+
+- Plugged into a PC it enumerates as a USB sound card (UAC1, 48kHz/16-bit/stereo);
+  whatever the PC plays is streamed to the Pico over USB;
+- The audio is FM-modulated in real time onto **87.9 MHz** (configurable:
+  broadcast FM 88-108M, 2m amateur 144-148M, and UHF 409/433/440M via the
+  3rd/5th harmonic of a <=150MHz fundamental) using the
+  [pico-fractional-pll](https://github.com/kaduhi/pico-fractional-pll)
+  technique, output on GPIO21;
+- MicroPython provides an interactive **`fm>` serial console**: carrier /
+  deviation / power / pre-emphasis / volume controls, a live level bar, and
+  PLL diagnostics.
+
+> **⚠️ LEGAL WARNING**: GPIO21 drives a strong RF square wave. **Do NOT attach
+> an antenna.** Unlicensed radiation is illegal in most countries. For testing,
+> put an FM radio within a few centimetres of the Pico.  On the UHF harmonic
+> bands the *fundamental* also radiates: for 409MHz it sits in the AERONAUTICAL
+> band (118-137MHz) - a band-pass filter is mandatory before radiating there.
+
+---
+
+## Quick start
+
+1. Flash `firmware/rp2040pico_fm_firmware.uf2` (BOOTSEL drag & drop, or
+   `tools/flash.sh`);
+2. Upload the console script:
+   ```
+   tools/upload.sh
+   ```
+   (This handles the FM console holding the REPL - a plain `mpremote cp`
+   fails with "could not enter raw repl".  Equivalent manual steps: in a
+   serial terminal type `exit` at the `fm>` prompt, then
+   `mpremote resume fs cp python/main.py :main.py`.)
+3. Replug (or press RESET), wait 2-3 s, open a serial terminal (115200) — the
+   `fm>` console appears automatically;
+4. On the PC select **"RP2040 RF Transmitter"** as the audio output and play;
+5. Tune an FM radio to **87.9 MHz**.
+
+One-command band presets (save + reboot):
+
+```
+band fm    -> 98.0 MHz FM broadcast (parked-carrier silence)
+band 2m    -> 145.0 MHz, handheld radio VHF WIDE mode
+band 433   -> 433.92 MHz on the 3rd harmonic (UHF WIDE mode)
+band 409   -> 409.75 MHz license-free PMR on the 3rd harmonic
+```
+
+For a handheld radio use **WIDE (25kHz)** mode and keep the deviation around
+12kHz; the console sets `refdiv 2` automatically on every band that keys the RF
+off when silent (the half PDM step is what makes the harmonic links sound
+clean).  Broadcast FM keeps `refdiv 1` because a parked carrier with refdiv 2
+has an audible idle tone.  When there is no audio the
+narrowband bands key the RF output off (PTT-style) so the handheld squelch
+closes instead of hearing an off-tune parked carrier - use `silence park` to
+restore the broadcast behaviour.  For a serial session that survives reboots:
+`tools/serial.sh` (tio auto-reconnect; a udev rule pins `/dev/pico`).
+
+See [docs/en/usage.md](docs/en/usage.md) and
+[docs/en/commands.md](docs/en/commands.md).
+
+## Repository layout
+
+```
+release/
+├── README.md / README.zh.md   # English (default) + Chinese
+├── LICENSE                    # MIT + third-party licence notes
+├── build.sh                   # one-shot build (clone MicroPython + patch + build)
+├── patches/
+│   └── micropython-fm.patch   # all our changes on top of MicroPython v1.29.0
+├── firmware/
+│   ├── rp2040pico_fm_firmware.uf2   # prebuilt firmware
+│   └── sha256.txt
+├── python/
+│   └── main.py                # console script (copy to the board)
+├── tools/
+│   ├── flash.sh               # picotool helper
+│   ├── upload.sh              # upload python/main.py (console-aware)
+│   ├── serial.sh              # serial terminal (auto-reconnect)
+│   ├── pico_port.sh           # resolve the board's USB CDC port
+│   ├── pll_range.py           # PLL range / PDM-step enumeration
+│   ├── audio_quality.py       # host-side fixed-point audio-chain model
+│   ├── design_filters.py      # Chebyshev design + Q15 verification
+│   └── make_test_audio.py     # test signal generator
+└── docs/
+    ├── README.md              # documentation index (both languages)
+    ├── en/                    # English docs
+    │   ├── usage.md           # usage guide
+    │   ├── commands.md        # console command reference
+    │   ├── technical.md       # technical architecture
+    │   ├── audio-quality.md   # audio-quality layer audit
+    │   └── troubleshooting.md # troubleshooting
+    └── zh/                    # 中文文档
+        ├── usage.md           # 使用说明
+        ├── commands.md        # 指令使用指南
+        ├── technical.md       # 技术文档
+        ├── audio-quality.md   # 音质分层审计
+        └── troubleshooting.md # 故障排查
+```
+
+## Build from source
+
+```bash
+git clone git@git.sr.ht:~bytewolf/rp2040-fm-transmitter
+cd rp2040-fm-transmitter
+./build.sh            # default MicroPython v1.29.0
+# or ./build.sh <tag-or-commit>
+```
+The script clones a clean MicroPython, applies the patch, fetches submodules
+and builds; the artifact lands in `firmware/`. It is fully automated — one
+command produces the UF2 and its `sha256.txt`. Details in
+[docs/en/technical.md](docs/en/technical.md).
+
+**Prerequisites (Ubuntu/Debian)** — the host needs the RP2040 cross-toolchain
+before running `build.sh`:
+
+```bash
+sudo apt install -y build-essential git cmake \
+    gcc-arm-none-eabi libnewlib-arm-none-eabi \
+    libstdc++-arm-none-eabi-newlib python3
+```
+
+`mpremote` (upload `main.py`) and `picotool` (`tools/flash.sh`) are optional
+and only needed for uploading/flashing. See
+[docs/en/technical.md](docs/en/technical.md) for details.
+
+## Documents
+
+| Doc | Contents |
+|-----|----------|
+| [docs/en/usage.md](docs/en/usage.md) | flashing, connecting, playing, LED |
+| [docs/en/commands.md](docs/en/commands.md) | full `fm>` command reference |
+| [docs/en/technical.md](docs/en/technical.md) | architecture: USB audio → ring buffer → 48kHz modulation → PLL-PDM |
+| [docs/en/troubleshooting.md](docs/en/troubleshooting.md) | common issues (Windows drivers, no signal, shell) |
+
+Chinese versions live under [docs/zh/](docs/zh/); see the
+[docs index](docs/README.md).
+
+## Credits & licences
+
+- [MicroPython](https://github.com/micropython/micropython) (MIT) — our changes
+  are shipped as a patch;
+- [pico-fractional-pll](https://github.com/kaduhi/pico-fractional-pll)
+  (BSD-3-Clause, Kazuhisa Terasaki) — **its core source is incorporated into
+  our patch** (`ports/rp2/fm_transmitter/pico_fractional_pll.c/.h`); keep the
+  attribution; it is not a separate build dependency;
+- [kaduhi/pico-playground (fm_transmitter branch)](https://github.com/kaduhi/pico-playground)
+  — **reference only** (UAC1 descriptors and FM modulation ideas); no code
+  from it is included;
+- This project: see [LICENSE](LICENSE).
+
+## Dependencies & build sources
+
+The build depends only on **MicroPython** (with its own submodules
+pico-sdk/tinyusb/mbedtls). `build.sh` tries these sources in order:
+1. `https://git.sr.ht/~bytewolf/micropython` (maintainer's fork, for
+   availability);
+2. `https://github.com/micropython/micropython` (upstream).
+
+> On "why not a git submodule": for this project the **patch + clone script**
+> fits better — MicroPython is large with its own nested submodules, so a
+> top-level submodule still needs recursive init; a patch keeps "what we
+> changed" visible, applies to any version/fork, and does not pin the project
+> to one fork's maintenance cadence. If you prefer submodules, apply the patch
+> inside your fork and reference it with `git clone --recurse-submodules`;
+> build.sh already skips the patch when it is already applied.
