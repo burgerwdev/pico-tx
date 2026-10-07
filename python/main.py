@@ -20,7 +20,7 @@ import time
 
 import pico_tx
 
-VERSION = "0.1.0"          # console release version (see release README)
+VERSION = "0.1.1"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
 # (release/firmware/picotx_firmware.uf2).  Shown by `ver`.

@@ -1,6 +1,6 @@
 # pico-tx（RP2040 通用 RF 发射机）
 
-**版本 v0.1.0** —— RP2040 通用 RF 发射机
+**版本 v0.1.1** —— RP2040 通用 RF 发射机
 
 中文 · [English](README.md) · [项目主页](https://git.sr.ht/~bytewolf/pico-tx) · 基于 [rp2040-fm-transmitter](https://git.sr.ht/~bytewolf/rp2040-fm-transmitter)
 

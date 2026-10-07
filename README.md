@@ -1,6 +1,6 @@
 # pico-tx
 
-**Version 0.1.0** — RP2040 general-purpose RF transmitter
+**Version 0.1.1** — RP2040 general-purpose RF transmitter
 
 [中文](README.zh.md) · English · [Project](https://git.sr.ht/~bytewolf/pico-tx) · based on [rp2040-fm-transmitter](https://git.sr.ht/~bytewolf/rp2040-fm-transmitter)
 
