@@ -38,6 +38,35 @@ All values are in Hz unless noted. Type `help` in the console anytime.
 | `reboot` | Save the current settings and reboot (same as replugging, keeps config) | `reboot` |
 | `exit` | Leave the console back to the REPL | `exit` |
 
+## Transmit modes
+
+All modulation runs in firmware; the console only selects the scheme and feeds
+data. Switching to a non-`fm` mode starts the modulation engine automatically.
+
+| Command | Description | Example |
+|---|---|---|
+| `mode [name]` | Show or select the transmit scheme: `fm`,`tone`,`fsk`,`ook`,`cw`,`chirp`,`psk` | `mode tone` |
+| `tx on\|off` | Start/stop the modulation engine (non-FM schemes) | `tx off` |
+| `tone <hz> [hz2] [level%]` | Internal DDS tone(s) FM-modulated onto the carrier; `tone off` stops | `tone 1000` |
+| `fsk <baud> <shift_hz> <hex>` | Queue 2-FSK symbols (`0`→-shift, `1`→+shift) | `fsk 1200 4500 55aa0f` |
+| `ook <baud> <hex>` | Queue on/off keying symbols (`0`→RF off) | `ook 2000 aaaa` |
+| `psk <baud> <2\|4> <hex>` | Queue BPSK (`2`) / QPSK (`4`) symbols | `psk 2400 2 abcd` |
+| `cw <text>` | Key `text` as Morse on the carrier (20 wpm, blocking) | `cw CQ CQ DE PICO TX` |
+| `chirp <f0> <f1> <ms> [gap] [repeat]` | Linear frequency sweep; `chirp off` stops | `chirp 87900000 88100000 100 20 1` |
+| `service [cmd...]` | Console command to run automatically at boot (headless); `service off` clears | `service tone 1000` |
+| `console on\|off` | Interactive console on/off; `off` keeps the boot service running (Ctrl-C returns to the REPL) | `console off` |
+
+Notes:
+- `fsk`/`ook`/`psk` use a 256-symbol firmware FIFO; symbols beyond that are
+  rejected (`send` returns how many were accepted). Choose `baud` so the
+  symbol rate fits the PLL loop bandwidth (a few kbaud for wideband FM).
+- `shift_hz` must fit inside the PLL window set by `init(carrier ± deviation)`.
+- `chirp` frequencies are absolute Hz and must also lie inside that window.
+- `cw` keys the carrier off/on; the radio hears Morse only if it is tuned to
+  the carrier (use a narrow FM/AM receiver or an SDR).
+- `service` runs one command after boot, e.g. `service mode cw` or
+  `service tone 1000`. Combine with `console off` for a headless transmitter.
+
 ## Notes
 
 - **`freq` vs PLL range**: fine-tunes live only inside the current PLL range
@@ -85,10 +114,10 @@ All values are in Hz unless noted. Type `help` in the console anytime.
   AGC/quieting cycle audibly. Watch the T marker in `vbar`.
 - **`vbar` clips**: the per-second clip rate shows how often the limiter is
   engaged; a high rate means the PC volume is too high (lower it, or `vol`).
-- **`reset`** deletes `/fm_cfg.json` and reboots to defaults (75µs pre-emphasis,
+- **`reset`** deletes `/tx_cfg.json` and reboots to defaults (75µs pre-emphasis,
   squelch off). **`reboot`** persists the current settings first and reboots
   without deleting them — use it when a change only takes effect after a
   replug (e.g. after `ledpin`/`pin`-style reconfigurations you have already
   saved).
-- Settings persist in `/fm_cfg.json` on the board's filesystem and are restored
+- Settings persist in `/tx_cfg.json` on the board's filesystem and are restored
   at boot.

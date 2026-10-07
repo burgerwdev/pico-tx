@@ -1,6 +1,6 @@
 # Documentation
 
-RP2040 FM Transmitter **v0.24.0** — documentation index.
+pico-tx **v0.24.0** — documentation index.
 
 > English · [中文](README.zh.md)
 

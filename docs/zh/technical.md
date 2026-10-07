@@ -115,7 +115,7 @@ refdiv 2 会把可达 PLL 窗口变窄，因此启动时如果 `init` 失败会�
 refdiv 1（失败的 `init` 不会启动 core1，所以重试是安全的——这与「运行中
 deinit/init 会死锁」是两回事），并把 1 写回配置避免每次开机重试。
 
-`status` 现在会显示实际的 step（`pico_fm.range()` 返回的窗口宽度就是
+`status` 现在会显示实际的 step（`pico_tx.range()` 返回的窗口宽度就是
 一个反馈分频步）。另外 `tools/pll_range.py minstep` 验证了 C 的
 `calculate_pll_divider()` 取到的解**已经是同 pass 内 step 最小的解**
 （HF 559 个窗口 + UHF 129 个窗口，0 个反例），所以无需修改 PLL 搜索。
@@ -133,11 +133,11 @@ deinit/init 会死锁」是两回事），并把 1 写回配置避免每次开�
 
 `build.sh` 克隆干净的 MicroPython（**依次尝试维护者 fork
 `git.sr.ht/~bytewolf/micropython` 与官方 upstream**）→ 应用
-`patches/micropython-fm.patch`（已应用则跳过）→ `make submodules` →
-`make BOARD=RPI_PICO_FM`。补丁包含：
-- `ports/rp2/boards/RPI_PICO_FM/`（新板：48MHz 时钟 + USB_AUDIO + FM 宏 + 独立
+`patches/micropython-tx.patch`（已应用则跳过）→ `make submodules` →
+`make BOARD=RPI_PICO_TX`。补丁包含：
+- `ports/rp2/boards/RPI_PICO_TX/`（新板：48MHz 时钟 + USB_AUDIO + FM 宏 + 独立
   VID/PID 0x1209:0xFA50 + USB 字符串）；
-- `ports/rp2/fm_transmitter/`（pico_fm 用户 C 模块：**内置 pico-fractional-pll
+- `ports/rp2/tx/`（pico_tx 用户 C 模块：**内置 pico-fractional-pll
   库源码**（BSD-3-Clause，Kazuhisa Terasaki）+ 调制器 + MicroPython 模块）；
 - `ports/rp2/main.c`（48MHz 启动）、`modmachine.c`（禁用 machine.freq 设置）；
 - `shared/tinyusb/`（UAC1 描述符与配置）。
@@ -179,6 +179,6 @@ sudo apt install -y \
 ```bash
 cd micropython
 git add -A
-git diff --cached > ../release/patches/micropython-fm.patch
+git diff --cached > ../release/patches/micropython-tx.patch
 git reset -q
 ```

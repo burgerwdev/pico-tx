@@ -6,13 +6,13 @@
 # upload would fail with "could not enter raw repl" or a stray login prompt.
 #
 # Note the USB IDs below belong to the *firmware*, not to a board model:
-# MICROPY_HW_USB_VID/PID = 0x1209/0xFA50 lives in
-# ports/rp2/boards/RPI_PICO_FM/mpconfigboard.h, so a Pico, a Pico W, an
-# RP2040-Zero or a clone running this firmware all enumerate as 1209:fa50.
+# MICROPY_HW_USB_VID/PID = 0x1209/0xFA51 lives in
+# ports/rp2/boards/RPI_PICO_TX/mpconfigboard.h, so a Pico, a Pico W, an
+# RP2040-Zero or a clone running this firmware all enumerate as 1209:fa51.
 #
 # Resolution order:
 #   1. $FM_PORT                              explicit override
-#   2. VID:PID == 1209:fa50                  this firmware (any RP2040 board)
+#   2. VID:PID == 1209:fa51                  this firmware (any RP2040 board)
 #   3. generic MicroPython RP2040            board not yet flashed with this
 #      (2e8a:0005, or a "MicroPython"        firmware (stock MicroPython,
 #       manufacturer/product string)        recovery, another build)
@@ -41,7 +41,7 @@ collect() {
         prod="$(cat "${d}/device/../product" 2>/dev/null || true)"
         case "$1" in
             exact)
-                [ "${vid}:${pid}" = "1209:fa50" ] && echo "/dev/$(basename "${d}")"
+                [ "${vid}:${pid}" = "1209:fa51" ] && echo "/dev/$(basename "${d}")"
                 ;;
             generic)
                 if [ "${vid}:${pid}" = "2e8a:0005" ] || \
@@ -112,7 +112,7 @@ find_port() {
         done
     fi
 
-    fail "RP2040 MicroPython board not found (USB 1209:fa50 or 2e8a:0005)."
+    fail "RP2040 MicroPython board not found (USB 1209:fa51 or 2e8a:0005)."
 }
 
 self_test() {
@@ -139,11 +139,11 @@ self_test() {
 
     # a PlutoSDR console plus our board on a different tty number
     add ttyACM0 0456 b673 "Analog Devices Inc." "PlutoSDR (ADALM-PLUTO)"
-    add ttyACM1 1209 fa50 "BurgerW" "RP2040 RF Transmitter"
-    check /dev/ttyACM1 "picks 1209:fa50 among candidates"
+    add ttyACM1 1209 fa51 "BurgerW" "pico-tx"
+    check /dev/ttyACM1 "picks 1209:fa51 among candidates"
 
     # the same, but the board is an RP2040-Zero: identical firmware IDs
-    add ttyACM1 1209 fa50 "BurgerW" "RP2040 RF Transmitter"
+    add ttyACM1 1209 fa51 "BurgerW" "pico-tx"
     check /dev/ttyACM1 "board model does not matter (IDs come from firmware)"
 
     # board not flashed with this firmware yet: stock MicroPython
@@ -152,8 +152,8 @@ self_test() {
     check /dev/ttyACM1 "falls back to a generic MicroPython RP2040"
 
     # two boards running this firmware -> never guess
-    add ttyACM1 1209 fa50 "BurgerW" "RP2040 RF Transmitter"
-    add ttyACM2 1209 fa50 "BurgerW" "RP2040 RF Transmitter"
+    add ttyACM1 1209 fa51 "BurgerW" "pico-tx"
+    add ttyACM2 1209 fa51 "BurgerW" "pico-tx"
     check - "ambiguous matches are not guessed"
 
     # explicit override wins, and absence fails

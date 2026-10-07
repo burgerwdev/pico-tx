@@ -4,7 +4,7 @@
 
 本文逐层审计本仓库中影响**接收端声音质量**的代码，给出可量化的限值与影响排序。
 所有数据来自 host 端脚本 `tools/audio_quality.py`（逐行复刻
-`fm_modulator.c: fm_audio_process()` 的定点语义与系数）。
+`tx_modulator.c: tx_audio_process()` 的定点语义与系数）。
 
 > **本分析不刷写开发板、不做硬件实测。** 文中每个数字都可用下列命令在主机上
 > 复现：
@@ -21,11 +21,11 @@
 
 | 层 | 位置 | 限值 | 对听感的影响 | 优先级 |
 |---|---|---|---|---|
-| **L3 音频 DSP 链** | `fm_modulator.c: fm_audio_process()` | 预加重曲线非标准：2 kHz 处多 +8.6 dB、15 kHz 处少 −6.3 dB；一阶低通 ×2 在 10 kHz 掉 −2.2 dB；限幅器无前瞻 | **音色（中频隆起、高频发闷）+ 大声压时严重失真（THD 18–26%）** | **P0** |
+| **L3 音频 DSP 链** | `tx_modulator.c: tx_audio_process()` | 预加重曲线非标准：2 kHz 处多 +8.6 dB、15 kHz 处少 −6.3 dB；一阶低通 ×2 在 10 kHz 掉 −2.2 dB；限幅器无前瞻 | **音色（中频隆起、高频发闷）+ 大声压时严重失真（THD 18–26%）** | **P0** |
 | **L1 USB 音频与异步采样时钟** | `shared/tinyusb/*`、`tud_audio_rx_done_isr()` | 主机 48 kHz 与 PWM 48 kHz 是两颗独立晶振，无重采样、无反馈端点、无漂移计数 | 长时间播放后周期性 click（>14 分钟后开始，持续存在） | **P1** |
 | **L5 PLL/PDM 射频层** | `pico_fractional_pll.c` | 瞬时频率按 `ref/div` 步进在 1 MHz 上抖动，PLL 环路滤波只部分平均 | 射频相噪/接收端噪底（窄带与弱信号尤其明显） | **P1** |
 | **L2 单声道混音与环形缓冲** | `tud_audio_rx_done_isr()`、`fm_pwm_wrap_handler()` | 混音本身无缺陷（int32 不溢出、反相抵消为单声道固有）；环形缓冲无丢样/欠载计数器，欠载时清零而非保持 | 混音无可听影响（−91.8 dBFS 截断）；缓冲问题掩盖 L1 并把丢样放大为 dropout | **P2** |
-| **L6 USB 控制面与默认值** | `fm_modulator.c: fm_db256_to_gain()`、`main.py` | UAC1 音量按 **dB→线性增益**线性映射，不是 dB→dB | 音量滑条标定错误（请求 −30 dB 实得 −6 dB） | **P2** |
+| **L6 USB 控制面与默认值** | `tx_modulator.c: tx_db256_to_gain()`、`main.py` | UAC1 音量按 **dB→线性增益**线性映射，不是 dB→dB | 音量滑条标定错误（请求 −30 dB 实得 −6 dB） | **P2** |
 | **L4 调制映射** | `fm_pwm_wrap_handler()` | `freq = carrier + (sample*dev)>>15` | 无（0.99997× 满偏离，可忽略） | — |
 
 优先级判据：L3 直接决定音色与失真且可 100% 在 host 端验证；L1/L5 决定"长听"与
@@ -178,7 +178,7 @@ $ python3 tools/audio_quality.py mono
 
 ### L6 USB 控制面与默认值（P2）
 
-`fm_db256_to_gain()` 把 UAC1 的 dB 值**线性**映射到线性增益：
+`tx_db256_to_gain()` 把 UAC1 的 dB 值**线性**映射到线性增益：
 
 ```c
 return (uint16_t)(((clamped - FM_VOL_MIN) * 32767) / (FM_VOL_MAX - FM_VOL_MIN));
@@ -296,9 +296,9 @@ return (uint16_t)(((clamped - FM_VOL_MIN) * 32767) / (FM_VOL_MAX - FM_VOL_MIN));
 
 ## 4. 已落地的改动与改前改后数据（host 端）
 
-三项改动均在 `fm_modulator.c` 的定点路径内，无除法、无浮点；
+三项改动均在 `tx_modulator.c` 的定点路径内，无除法、无浮点；
 `python3 tools/audio_quality.py compare` 可完整复现下表。补丁已重新生成
-（`patches/micropython-fm.patch`）并**编译通过**（`make BOARD=RPI_PICO_FM`，
+（`patches/micropython-tx.patch`）并**编译通过**（`make BOARD=RPI_PICO_TX`，
 仅编译，未刷写）。
 
 ### 改动 1：标准预加重曲线
@@ -358,12 +358,12 @@ THD (%)
 
 ### 改动 4：欠载保持 + 丢样/欠载计数器（L1/L2）
 
-- `fm_modulator.c`：ring 空时不再无条件清零。正在流式（`s_audio_active`）
+- `tx_modulator.c`：ring 空时不再无条件清零。正在流式（`s_audio_active`）
   且连续空拍 < 480（10 ms）时重复上一采样（hold-last），并计入
   `s_ring_underflows`；连续空拍超过 10 ms 说明主机真的停了，仍停载波
   （保持原有"主机暂停 = 精确停在 fc"的行为）。
 - ring 满时计入新增的 `s_ring_drops`（改前是静默丢弃）。
-- 通过 `pico_fm.ring_stats() -> (underflows, drops)` 暴露；`diag` 与
+- 通过 `pico_tx.ring_stats() -> (underflows, drops)` 暴露；`diag` 与
   `status` 均已输出（旧固件上 `diag` 会提示无此接口）。
 
 ```
@@ -399,7 +399,7 @@ THD (%)
   默认 auto；配置里的显式 1/2 优先。
 - 启动时若 refdiv 2 的窗口求解失败，自动回退到 refdiv 1（失败的 `init`
   不会启动 core1，重试安全），并把 1 写回配置。
-- `status` 新增实际 PDM step（`pico_fm.range()` 的窗口宽度就是一个
+- `status` 新增实际 PDM step（`pico_tx.range()` 的窗口宽度就是一个
   反馈分频步）。
 
 ```
@@ -426,8 +426,8 @@ $ python3 tools/pll_range.py minstep 80000000 500000000 500000 5000 --refdiv 2
 ### 改动 6：UAC1 音量真正的 dB 映射（L6）
 
 - 新增 `fm_vol_table[61]`（-0..-60 dB 每 dB 一个 `round(32767*10^(dB/20))`），
-  `fm_db256_to_gain()` 按整数 dB + 1/256 dB 余数插值；
-  `fm_gain_to_db256()` 为单调表的逆查（往返误差 0）。
+  `tx_db256_to_gain()` 按整数 dB + 1/256 dB 余数插值；
+  `tx_gain_to_db256()` 为单调表的逆查（往返误差 0）。
 - 只改两个定点辅助函数，不在 ISR 路径上，无浮点。
 
 | 请求 (dB) | 改前实际 (dB) | 改前误差 | 改后实际 (dB) | 改后误差 |
@@ -455,7 +455,7 @@ $ python3 tools/pll_range.py minstep 80000000 500000000 500000 5000 --refdiv 2
 | 关闭预加重时的带限 | 无（0.00 dB） | 20 kHz −34.7 dB |
 | 欠载（漂移）最大阶跃 | 27591 | **7053** |
 | 欠载时的 THD | 0.035 % | **0.008 %** |
-| 丢样/欠载可观测性 | 无计数器 | `pico_fm.ring_stats()` |
+| 丢样/欠载可观测性 | 无计数器 | `pico_tx.ring_stats()` |
 | 2m 的 PDM 抖动步进 | 1.2 MHz | **600 kHz** |
 | 30m 的 PDM 抖动步进 | 80 kHz | **40 kHz** |
 | refdiv 选择 | 仅看 >150 MHz | **`refdiv_for()` + `refdiv auto`** |
@@ -490,23 +490,23 @@ $ python3 tools/pll_range.py minstep 80000000 500000000 500000 5000 --refdiv 2
 
 ```
 $ ./build.sh
-==> Building RPI_PICO_FM firmware, MicroPython ref: v1.29.0
+==> Building RPI_PICO_TX firmware, MicroPython ref: v1.29.0
     trying https://git.sr.ht/~bytewolf/micropython ...
     patch applied
     source: https://git.sr.ht/~bytewolf/micropython
 [100%] Built target firmware
-==> Done: firmware/rp2040pico_fm_firmware.uf2
+==> Done: firmware/picotx_firmware.uf2
    FLASH 350180 B / 640 KB (53.43%), RAM 36812 B / 256 KB (14.04%)
 ```
 
 - `./build.sh` 在**干净克隆**上全流程成功（克隆 → 打补丁 → `make submodules`
   → 编译），产出 UF2 的 sha256 为
   `810e9e0bd8599ef11051de81aa9a65a28e35ca4b39bf30caf9983b11f6018ebb`；
-  仓库中的 `firmware/rp2040pico_fm_firmware.uf2` 就是它
+  仓库中的 `firmware/picotx_firmware.uf2` 就是它
   （`sha256sum -c firmware/sha256.txt` 通过，`python/main.py` 的 `FW_SHA256`
   与其一致）。
 - **补丁往返校验**：在干净 MicroPython 上应用
-  `patches/micropython-fm.patch` 后重新生成的补丁与仓库中的补丁 **0 差异**，
+  `patches/micropython-tx.patch` 后重新生成的补丁与仓库中的补丁 **0 差异**，
   说明补丁自洽且能精确复现该构建。
 
 **硬件验证（v0.24.0，98.0 MHz FM 广播，主机播放中）**

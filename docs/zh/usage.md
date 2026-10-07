@@ -5,14 +5,14 @@
 ## 烧录
 
 1. 按住 **BOOTSEL** 按钮的同时把 Pico 插入电脑 USB，出现 `RPI-RP2` 盘；
-2. 把 `firmware/rp2040pico_fm_firmware.uf2` 拖入该盘（自动烧录并重启）；
+2. 把 `firmware/picotx_firmware.uf2` 拖入该盘（自动烧录并重启）；
    或 `tools/flash.sh`（需 picotool）。
 3. 校验（可选）：在仓库根目录运行 `sha256sum -c firmware/sha256.txt`。
 
 ## 连接
 
 - 设备会枚举为：**串口**（MicroPython REPL / `fm>` 控制台）+ **USB 音频设备**
-  （"RP2040 RF Transmitter"，系统里显示为 RP2040 RF Transmitter / BurgerW）。
+  （"pico-tx"，系统里显示为 pico-tx / BurgerW）。
 - 推荐：`tools/serial.sh`（tio）——切频段/预设会重启板子，tio 会自动重连；
   配合 udev 规则把设备名固定为 `/dev/pico`，ttyACM 序号不再漂移。
 - 手动：Linux `screen /dev/ttyACM0 115200`；Windows PuTTY（COM 口 115200）；
@@ -23,7 +23,7 @@
 
 ## 播放
 
-1. 在电脑声音设置中把输出设备选为 **RP2040 RF Transmitter**；
+1. 在电脑声音设置中把输出设备选为 **pico-tx**；
 2. 播放音乐；
 3. FM 收音机贴近 Pico，调到 **87.9MHz**。
 
@@ -62,7 +62,7 @@ refdiv 2——PDM 步长减半是窄带/谐波链路音质干净的关键；广�
 
 ## 播放
 
-1. 在电脑声音设置中把输出设备选为 **RP2040 RF Transmitter**；
+1. 在电脑声音设置中把输出设备选为 **pico-tx**；
 2. 播放音乐；
 3. FM 收音机贴近 Pico，调到 **87.9MHz**。
 

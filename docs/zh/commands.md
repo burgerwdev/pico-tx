@@ -38,6 +38,30 @@
 | `reboot` | 保存当前设置并重启（等同重新插拔，保留配置） | `reboot` |
 | `exit` | 退出控制台回到 REPL | `exit` |
 
+## 发射模式
+
+所有调制都在固件中完成；控制台只负责选择方式与喂数据。切到非 `fm` 模式会自动启动调制引擎。
+
+| 命令 | 说明 | 示例 |
+|---|---|---|
+| `mode [名称]` | 查看/选择发射方式：`fm` `tone` `fsk` `ook` `cw` `chirp` `psk` | `mode tone` |
+| `tx on\|off` | 启动/停止调制引擎（非 FM 方式） | `tx off` |
+| `tone <hz> [hz2] [level%]` | 内部 DDS 音调 FM 调制到载波；`tone off` 停止 | `tone 1000` |
+| `fsk <baud> <shift_hz> <hex>` | 排队 2-FSK 符号（`0`→-shift，`1`→+shift） | `fsk 1200 4500 55aa0f` |
+| `ook <baud> <hex>` | 排队开关键控符号（`0`→RF 关） | `ook 2000 aaaa` |
+| `psk <baud> <2\|4> <hex>` | 排队 BPSK（`2`）/ QPSK（`4`）符号 | `psk 2400 2 abcd` |
+| `cw <文本>` | 在载波上发摩斯（20 wpm，阻塞） | `cw CQ CQ DE PICO TX` |
+| `chirp <f0> <f1> <ms> [gap] [repeat]` | 线性扫频；`chirp off` 停止 | `chirp 87900000 88100000 100 20 1` |
+| `service [命令...]` | 开机自动执行的一条控制台命令（无头运行）；`service off` 清除 | `service tone 1000` |
+| `console on\|off` | 交互控制台开关；`off` 仅跑开机服务（Ctrl-C 回 REPL） | `console off` |
+
+说明：
+- `fsk`/`ook`/`psk` 用固件内 256 符号 FIFO，超出部分会被拒绝（`send` 返回实际接受的数量）。`baud` 要配合 PLL 环路带宽（宽带 FM 下几 kbaud 量级）。
+- `shift_hz` 必须落在 `init(carrier ± deviation)` 设定的 PLL 窗口内。
+- `chirp` 频率为绝对 Hz，同样必须在窗口内。
+- `cw` 是键控载波通断；只有把接收机调到该载波（窄带 FM/AM 或 SDR）才能听到摩斯。
+- `service` 开机后执行一条命令，例如 `service mode cw` 或 `service tone 1000`；搭配 `console off` 即为无头发射机。
+
 ## 说明
 
 - **`freq` 与 PLL 范围**：`freq` 只能在当前 `init` 锁定的 PLL 范围内实时微调
@@ -73,8 +97,8 @@
   周期性动作产生可闻噪声。观察 `vbar` 中的 T 标记。
 - **`vbar` 的 clips**：每秒削波次数表示限幅器被触发的频率；数值高说明 PC 音量
   过大（调低音量或 `vol`）。
-- **`reset`**：删除 `/fm_cfg.json`（载波/频偏/引脚/功率/LED/预加重/静噪）并重启
+- **`reset`**：删除 `/tx_cfg.json`（载波/频偏/引脚/功率/LED/预加重/静噪）并重启
   到默认（75µs 预加重、静噪关）。**`reboot`**：先把当前设置持久化再重启、
   不删除配置——用于"某些改动需要重新插拔才生效"的场景（例如已经保存过的
   `ledpin`/`pin` 类重配置）。
-- 配置持久化在板内文件系统 `/fm_cfg.json`；开机自动恢复。
+- 配置持久化在板内文件系统 `/tx_cfg.json`；开机自动恢复。

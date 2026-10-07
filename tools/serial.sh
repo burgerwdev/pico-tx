@@ -12,7 +12,7 @@
 # number never matters:
 #
 #   # /etc/udev/rules.d/99-pico.rules
-#   SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="fa50", \
+#   SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="fa51", \
 #       SYMLINK+="pico"
 #   # then:
 #   sudo udevadm control --reload && sudo udevadm trigger
@@ -20,7 +20,7 @@
 # Install tio (auto-reconnect):  sudo pacman -S tio
 #
 # Usage: ./serial.sh [device]    (default: the board's CDC port, resolved by
-#                                 tools/pico_port.sh from USB IDs 1209:fa50,
+#                                 tools/pico_port.sh from USB IDs 1209:fa51,
 #                                 falling back to /dev/pico)
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

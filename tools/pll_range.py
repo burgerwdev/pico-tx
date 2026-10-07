@@ -2,8 +2,8 @@
 """Host-side replica of the pico-fractional-pll divider search.
 
 This is a byte-for-byte port of calculate_pll_divider() / is_div_possible()
-from ports/rp2/fm_transmitter/pico_fractional_pll.c (see
-patches/micropython-fm.patch).  It answers, without hardware, the only
+from ports/rp2/tx/pico_fractional_pll.c (see
+patches/micropython-tx.patch).  It answers, without hardware, the only
 question that decides whether a band is usable at all:
 
     "can the fractional PLL produce a range that covers carrier +/- deviation?"
@@ -101,7 +101,7 @@ def find_divider(freq_range_min, freq_range_max, refdiv=1):
     """Port of calculate_pll_divider().  Returns a dict or None.
 
     freq_range_min/max are the *requested output range* in Hz (what
-    pico_fm.init() receives as carrier-deviation / carrier+deviation).
+    pico_tx.init() receives as carrier-deviation / carrier+deviation).
     """
     for sol in iter_solutions(freq_range_min, freq_range_max, refdiv):
         return sol

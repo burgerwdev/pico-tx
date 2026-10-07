@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# build.sh — one-shot builder for the RP2040 Pico FM Transmitter firmware.
+# build.sh — one-shot builder for the pico-tx RP2040 RF transmitter firmware.
 # No CI needed: clones a clean MicroPython, applies our patch, builds the UF2.
 #
 # MicroPython source order (first reachable wins):
@@ -12,14 +12,14 @@
 #   ./build.sh v1.29.0         # a tag or branch
 #   ./build.sh <commit-sha>    # an exact commit (clones then checks out)
 #
-# Output: firmware/rp2040pico_fm_firmware.uf2 (+ sha256.txt)
+# Output: firmware/picotx_firmware.uf2 (+ sha256.txt)
 # ============================================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MPY_REF="${1:-v1.29.0}"
 WORK="${SCRIPT_DIR}/build_tmp"
-PATCH="${SCRIPT_DIR}/patches/micropython-fm.patch"
+PATCH="${SCRIPT_DIR}/patches/micropython-tx.patch"
 OUT_DIR="${SCRIPT_DIR}/firmware"
 
 MPY_REPOS=(
@@ -27,7 +27,7 @@ MPY_REPOS=(
     "https://github.com/micropython/micropython"
 )
 
-echo "==> Building RPI_PICO_FM firmware, MicroPython ref: ${MPY_REF}"
+echo "==> Building RPI_PICO_TX firmware, MicroPython ref: ${MPY_REF}"
 
 rm -rf "${WORK}"
 mkdir -p "${WORK}"
@@ -82,19 +82,19 @@ echo "    source: ${SOURCE}"
 make -C micropython/ports/rp2 submodules
 
 # 4. Build.
-make -C micropython/ports/rp2 BOARD=RPI_PICO_FM -j"$(nproc)"
+make -C micropython/ports/rp2 BOARD=RPI_PICO_TX -j"$(nproc)"
 
 # 5. Collect the artifact.
 mkdir -p "${OUT_DIR}"
-cp micropython/ports/rp2/build-RPI_PICO_FM/firmware.uf2 \
-    "${OUT_DIR}/rp2040pico_fm_firmware.uf2"
+cp micropython/ports/rp2/build-RPI_PICO_TX/firmware.uf2 \
+    "${OUT_DIR}/picotx_firmware.uf2"
 VERSION="$(cat "${SCRIPT_DIR}/VERSION" 2>/dev/null || echo unknown)"
-FW_HASH="$(sha256sum "${OUT_DIR}/rp2040pico_fm_firmware.uf2" | awk '{print $1}')"
+FW_HASH="$(sha256sum "${OUT_DIR}/picotx_firmware.uf2" | awk '{print $1}')"
 {
-    echo "# RP2040 FM Transmitter - v${VERSION}"
-    echo "# Prebuilt firmware for MicroPython v1.29.0 (patch micropython-fm.patch)."
+    echo "# pico-tx - v${VERSION}"
+    echo "# Prebuilt firmware for MicroPython v1.29.0 (patch micropython-tx.patch)."
     echo "# Verify from the repo root:  sha256sum -c firmware/sha256.txt"
-    echo "${FW_HASH}  firmware/rp2040pico_fm_firmware.uf2"
+    echo "${FW_HASH}  firmware/picotx_firmware.uf2"
 } > "${OUT_DIR}/sha256.txt"
 
 # 6. Keep the console's FW_SHA256 in sync with the built firmware (the
@@ -103,5 +103,5 @@ sed -i "s/^FW_SHA256 = \".*\"/FW_SHA256 = \"${FW_HASH}\"/" "${SCRIPT_DIR}/python
 echo "==> main.py FW_SHA256 synced: ${FW_HASH}"
 
 echo
-echo "==> Done: ${OUT_DIR}/rp2040pico_fm_firmware.uf2"
+echo "==> Done: ${OUT_DIR}/picotx_firmware.uf2"
 cat "${OUT_DIR}/sha256.txt"

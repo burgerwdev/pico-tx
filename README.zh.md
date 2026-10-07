@@ -1,32 +1,54 @@
-# RP2040 FM 发射器（RP2040 FM Transmitter）
+# pico-tx（RP2040 通用 RF 发射机）
 
-**版本 v0.24.0** —— MicroPython USB 声卡 + FM 发射器
+**版本 v0.1.0** —— RP2040 通用 RF 发射机
 
-中文 · [English](README.md) · [项目主页](https://git.sr.ht/~bytewolf/rp2040-fm-transmitter)
+中文 · [English](README.md) · 基于 [rp2040-fm-transmitter](https://git.sr.ht/~bytewolf/rp2040-fm-transmitter)
 
-把一片 Raspberry Pi Pico（RP2040）变成 **USB 声卡 + FM 发射器**：
+把一片 Raspberry Pi Pico（RP2040）变成 **通用 RF 发射机**，基于
+[pico-fractional-pll](https://github.com/kaduhi/pico-fractional-pll) 技术
+（GPIO21 输出 RF 方波，无 DAC / 模拟级）：
 
-- 插上电脑即识别为 USB 声卡（UAC1，48kHz/16bit/立体声），电脑播放的声音经 USB 送入 Pico；
-- 声音通过 [pico-fractional-pll](https://github.com/kaduhi/pico-fractional-pll) 技术实时 FM 调制到 **87.9MHz**（可配置：广播 88-108M、2m 业余 144-148M、以及经 ≤150MHz 基频 3/5 次谐波输出的 UHF 409/433/440M），从 GPIO21 输出；
-- MicroPython 提供交互式 **`fm>` 串口控制台**：调载波/频偏/功率/预加重/音量，电平条显示，PLL 诊断等。
+- **所有调制都在固件里**（48kHz PWM 中断），MicroPython 只做控制层，不参与实时通路；
+- **USB 声卡**（UAC1，48kHz/16bit/立体声）只是多种信号源之一：电脑播放的声音 FM 调制到载波；
+- `tx>` 控制台可切换更多发射方式：内部 DDS 音调、FSK、OOK、CW（摩斯）、线性 chirp、BPSK/QPSK；
+- 载波覆盖广播 88-108M、2m 业余 144-148M、以及经 ≤150MHz 基频 3/5 次谐波输出的 UHF 409/433/440M。
 
-> **⚠️ 法律警告**：GPIO21 输出强 RF 方波。**严禁接天线**。多数国家未经许可辐射即违法。测试时让 FM 收音机贴近 Pico（几厘米内）即可。UHF 谐波模式下**基频也会辐射**：409MHz 的基频在民航频段（118-137MHz）内——在 409 段发射前必须加带通滤波器抑制基频。
+| 模式 | 信号源 | 调制 | 典型用途 |
+|------|--------|------|----------|
+| `fm` | USB 音频 | FM | 电脑声音发到 FM 收音机 |
+| `tone` | 内部 DDS | FM | 测试音 / CTCSS / DTMF |
+| `fsk` | 符号 FIFO | 2-FSK | RTTY / 数传 / 寻呼 |
+| `ook` | 符号 FIFO | 开关键控 | 遥控 |
+| `cw` | 键控 | 摩斯 | 信标 / 键控载波 |
+| `chirp` | 内部 | 线性扫频 | FMCW / 扫频测试 |
+| `psk` | 符号 FIFO | BPSK/QPSK | 恒包络数据 |
+
+> **⚠️ 法律警告**：GPIO21 输出强 RF 方波。**严禁接天线**。多数国家未经许可辐射即违法。测试时让 FM 收音机贴近 Pico（几厘米内）即可。UHF 谐波模式下**基频也会辐射**：409MHz 的基频在民航频段（118-137MHz）内——在 409 段发射前必须加带通滤波器抑制基频。FSK/OOK/PSK 等数字方式的频谱比窄带 FM 宽，辐射使用前务必检查谐波与杂散。
 
 ---
 
 ## 快速开始
 
-1. 烧录 `firmware/rp2040pico_fm_firmware.uf2`（BOOTSEL 拖拽，或 `tools/flash.sh`）；
+1. 烧录 `firmware/picotx_firmware.uf2`（BOOTSEL 拖拽，或 `tools/flash.sh`）；
 2. 上传控制台脚本：
    ```
    tools/upload.sh
    ```
-   （FM 控制台会抢占 REPL，直接 `mpremote cp` 会报 "could not enter raw repl"；
-   该脚本自动让控制台 `exit` 后上传并重启。手动等效步骤：串口终端在 `fm>`
+   （控制台会抢占 REPL，直接 `mpremote cp` 会报 "could not enter raw repl"；
+   该脚本自动让控制台 `exit` 后上传并重启。手动等效步骤：串口终端在 `tx>`
    输入 `exit`，再执行 `mpremote resume fs cp python/main.py :main.py`。）
-3. 拔插（或按 RESET），等 2~3 秒，打开串口终端（115200）→ 自动进入 `fm>` 控制台；
-4. 电脑上把音频输出选为 **"RP2040 RF Transmitter"**，播放音乐；
+3. 拔插（或按 RESET），等 2~3 秒，打开串口终端（115200）→ 自动进入 `tx>` 控制台；
+4. 电脑上把音频输出选为 **"pico-tx"**，播放音乐；
 5. FM 收音机调到 **87.9MHz** 收听。
+
+不接电脑也能发射（`tone`/`fsk`/`cw`/`chirp`/`psk`）：
+
+```
+mode tone            # 切到内部信号源
+tone 1000            # 1kHz FM 测试音
+mode cw              # 摩斯
+cw CQ CQ DE PICO TX
+```
 
 一键频段预设（保存并重启）：
 
@@ -54,9 +76,9 @@ release/
 ├── LICENSE                    # MIT + 第三方许可说明
 ├── build.sh                   # 一键构建脚本（克隆 MicroPython + 打补丁 + 编译）
 ├── patches/
-│   └── micropython-fm.patch   # 对 MicroPython v1.29.0 的全部改动
+│   └── micropython-tx.patch   # 对 MicroPython v1.29.0 的全部改动
 ├── firmware/
-│   ├── rp2040pico_fm_firmware.uf2   # 预编译固件
+│   ├── picotx_firmware.uf2   # 预编译固件
 │   └── sha256.txt
 ├── python/
 │   └── main.py                # FM 控制台脚本（复制到板子）
@@ -88,8 +110,8 @@ release/
 ## 从源码构建
 
 ```bash
-git clone git@git.sr.ht:~bytewolf/rp2040-fm-transmitter
-cd rp2040-fm-transmitter
+git clone <pico-tx-repo-url>
+cd pico-tx
 ./build.sh            # 默认 MicroPython v1.29.0
 # 或 ./build.sh <tag/commit>
 ```
@@ -123,7 +145,7 @@ sudo apt install -y build-essential git cmake \
 ## 致谢与许可
 
 - [MicroPython](https://github.com/micropython/micropython)（MIT）——我们的改动以补丁形式提供；
-- [pico-fractional-pll](https://github.com/kaduhi/pico-fractional-pll)（BSD-3-Clause，Kazuhisa Terasaki）——**其核心代码已并入本项目的补丁**（`ports/rp2/fm_transmitter/pico_fractional_pll.c/.h`），需保留署名；不作为独立构建依赖；
+- [pico-fractional-pll](https://github.com/kaduhi/pico-fractional-pll)（BSD-3-Clause，Kazuhisa Terasaki）——**其核心代码已并入本项目的补丁**（`ports/rp2/tx/pico_fractional_pll.c/.h`），需保留署名；不作为独立构建依赖；
 - [kaduhi/pico-playground（fm_transmitter 分支）](https://github.com/kaduhi/pico-playground)——**仅作参考**（USB 声卡描述符与 FM 调制思路），未包含其代码；
 - 本项目代码见 [LICENSE](LICENSE)。
 

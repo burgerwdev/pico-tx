@@ -1,10 +1,10 @@
-# RP2040 RF Transmitter console for the RPI_PICO_FM MicroPython firmware.
+# pico-tx console for the RPI_PICO_TX MicroPython firmware.
 #
 # Starts the transmitter, then provides an interactive serial console.
 # Connect with a serial terminal (screen/minicom/PuTTY on the CDC port,
 # 115200 baud) or run from Thonny.  Type `help` for the command list.
 #
-# Carrier/deviation can be persisted: `reinit` saves them to /fm_cfg.json and
+# Carrier/deviation can be persisted: `reinit` saves them to /tx_cfg.json and
 # reboots, so the new values are used on every boot.
 #
 # WARNING: GPIO21 outputs a strong RF signal. Do NOT attach an antenna wire;
@@ -18,13 +18,13 @@ import select
 import sys
 import time
 
-import pico_fm
+import pico_tx
 
-VERSION = "0.24.0"          # console release version (see release README)
+VERSION = "0.1.0"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
-# (release/firmware/rp2040pico_fm_firmware.uf2).  Shown by `ver`.
-FW_SHA256 = "810e9e0bd8599ef11051de81aa9a65a28e35ca4b39bf30caf9983b11f6018ebb"
+# (release/firmware/picotx_firmware.uf2).  Shown by `ver`.
+FW_SHA256 = "9bd6f49e7ba5032209cdb45fd0bb6867429639d8495fb2275b20631d4b0f7112"
 
 # Project links shown by the `ver` command.
 PROJECT_URL = "https://git.sr.ht/~bytewolf/rp2040-fm-transmitter"
@@ -37,7 +37,7 @@ RF_PIN = 21                # GP21 = CLK_GPOUT0 (configurable: 21/23/24/25)
 LED_WS2812 = False
 WS2812_PIN = 16
 
-CFG_FILE = "/fm_cfg.json"
+CFG_FILE = "/tx_cfg.json"
 DEFAULT_CARRIER = 87_900_000
 DEFAULT_DEVIATION = 75_000
 
@@ -84,8 +84,31 @@ TRIM_HZ = 0
 # radios) key the RF output off on silence instead, because a parked
 # off-tune carrier is heard as a continuous tone by a handheld receiver.
 # "auto" derives the mode from the band; the console stores the resolved
-# value in /fm_cfg.json after each band change.
+# value in /tx_cfg.json after each band change.
 SILENCE_MODE = "auto"      # "auto" | "park" | "gate"
+
+# General transmit scheme (mirrors pico_tx.mode()).
+MODE = "fm"
+# Boot service: a console command run automatically after setup (headless
+# transmit).  Empty = interactive only.
+SERVICE = ""
+# Interactive console on/off.  When off the device stays in a service loop
+# (still recoverable: Ctrl-C drops to the MicroPython REPL).
+CONSOLE_ON = True
+
+# ITU Morse timing (dots/dashes/dah) - sent by the `cw` command.
+MORSE = {
+    "A": ".-", "B": "-...", "C": "-.-.", "D": "-..", "E": ".",
+    "F": "..-.", "G": "--.", "H": "....", "I": "..", "J": ".---",
+    "K": "-.", "L": ".-..", "M": "--", "N": "-.", "O": "---",
+    "P": ".--.", "Q": "--.-", "R": ".-.", "S": "...", "T": "-",
+    "U": "..-", "V": "...-", "W": ".--", "X": "-..-", "Y": "-.--",
+    "Z": "--..", "0": "-----", "1": ".----", "2": "..---",
+    "3": "...--", "4": "....-", "5": ".....", "6": "-....",
+    "7": "--...", "8": "---..", "9": "----.", ".": ".-.-.-",
+    ",": "--..--", "?": "..--..", "/": "-..-.", "-": "-....-",
+    "=": "-...-", "+": ".-.-.", "@": ".--.-.",
+}
 
 
 def silence_gate_resolve(target):
@@ -113,7 +136,7 @@ def refdiv_for(target):
 
 def pll_limits():
     """(lo, hi) actual PLL output range in Hz, and max sensible deviation."""
-    lo, hi = pico_fm.range()
+    lo, hi = pico_tx.range()
     return lo, hi, (hi - lo) // 2
 
 
@@ -140,13 +163,13 @@ def dev_fund_of(dev_eff, harmonic):
 def pll_step_str():
     """The PDM dither step (ref/div) as a short string, for `status`.
 
-    pico_fm.range() returns the window the divider search accepted, which is
+    pico_tx.range() returns the window the divider search accepted, which is
     exactly one feedback-divider step wide (freq_delta = ref/div).  That width
     is the instantaneous frequency jump the core1 PDM loop produces - the
     hard limit behind the residual RF ripple.  Fundamental value; a harmonic
     band multiplies it by the harmonic at the radio.
     """
-    lo, hi = pico_fm.range()
+    lo, hi = pico_tx.range()
     d = hi - lo
     if d >= 1_000_000:
         return "%.2f MHz" % (d / 1e6)
@@ -163,8 +186,8 @@ def ring_stats():
     Drops are host samples discarded because the ring was full.  Both grow at
     about 48000 * ppm * 1e-6 per second.
     """
-    if hasattr(pico_fm, "ring_stats"):
-        return pico_fm.ring_stats()
+    if hasattr(pico_tx, "ring_stats"):
+        return pico_tx.ring_stats()
     return None, None
 
 
@@ -172,10 +195,10 @@ def build_help():
     """Compact command reference (static text).  Full dynamic ranges are
     shown by `status`; key behaviour notes are kept inline."""
     return """\
-RP2040 RF Transmitter console - commands (values in Hz unless stated):
+pico-tx console - commands (values in Hz unless stated):
   help                 show this help
   ver                  version, firmware sha256, project links
-  status               show all audio/FM parameters (incl. PLL range)
+  status               show all transmitter parameters (mode/carrier/range)
   freq <Hz>            fine-tune carrier (effective freq; live within the
                        current PLL band, else reboots; UHF targets use the
                        3rd/5th harmonic of a <=150MHz fundamental)
@@ -197,6 +220,23 @@ RP2040 RF Transmitter console - commands (values in Hz unless stated):
   pin <21|23|24|25>    change RF output GPIO (saves and reboots)
   pwr <2|4|8|12>       RF output drive strength in mA (12 = max, default)
   rf on|off            RF output on/off
+  tx on|off            modulation engine on/off (non-FM schemes)
+  mode [name]          select transmit mode: fm|tone|fsk|ook|cw|chirp|psk
+                         fm    = USB audio -> FM (default)
+                         tone  = internal DDS tone(s) -> FM
+                         fsk   = symbol stream -> carrier +/- shift
+                         ook   = symbol stream -> RF on/off
+                         cw    = Morse keying
+                         chirp = linear frequency sweep
+                         psk   = BPSK/QPSK (constant envelope)
+  tone <hz> [hz2] [lvl]  internal tone generator (lvl % 0-100) | tone off
+  fsk <baud> <shift> <hex>   send 2-FSK symbols (hex bytes)
+  ook <baud> <hex>           send on/off keying symbols
+  psk <baud> <2|4> <hex>     send BPSK/QPSK symbols
+  cw <text>                  send Morse on the carrier (20 wpm)
+  chirp <f0> <f1> <ms> [gap] [repeat]   linear sweep | chirp off
+  service [cmd...]     command to run at boot (headless) | service off
+  console on|off       interactive console on/off (off = headless service)
   audio on|off         USB-audio -> FM routing on/off
   vol <0-100>          volume in percent (mute == vol 0)
   mute on|off          mute the audio stream
@@ -435,6 +475,42 @@ def pct_to_vol(pct):
     return (pct * 32767 + 50) // 100
 
 
+def parse_hex_bytes(s):
+    """Parse a hex symbol string into bytes: '0x0f1e' / '0f 1e' / '0f1e'.
+    Returns None (and prints) on bad input."""
+    t = s.replace("0x", "").replace("0X", "").replace(",", " ").replace(" ", "")
+    if t == "":
+        return None
+    if len(t) % 2:
+        t = "0" + t
+    try:
+        return bytes.fromhex(t)
+    except ValueError:
+        print("error: '%s' is not hex" % s)
+        return None
+
+
+def send_morse(text, wpm=20):
+    """Key `text` as Morse on the active carrier (scheme=cw).  Blocking."""
+    dot = int(1200 / wpm)  # ms per dot at `wpm` words/minute
+    pico_tx.set_mode("cw")
+    pico_tx.start()
+    for ch in text.upper():
+        if ch == " ":
+            time.sleep_ms(dot * 7)
+            continue
+        code = MORSE.get(ch)
+        if code is None:
+            continue
+        for sym in code:
+            pico_tx.key(True)
+            time.sleep_ms(dot if sym == "." else dot * 3)
+            pico_tx.key(False)
+            time.sleep_ms(dot)
+        time.sleep_ms(dot * 3)
+    pico_tx.key(False)
+
+
 def load_cfg():
     try:
         with open(CFG_FILE) as f:
@@ -464,41 +540,44 @@ def save_cfg(cfg):
 def save_current(carrier=None, deviation=None, rf_pin=None, pdm_rate=None, refdiv=None):
     """Persist the current transmitter settings (defaults = current values)."""
     save_cfg({
-        "carrier": carrier if carrier is not None else pico_fm.carrier(),
-        "deviation": deviation if deviation is not None else pico_fm.deviation(),
+        "carrier": carrier if carrier is not None else pico_tx.carrier(),
+        "deviation": deviation if deviation is not None else pico_tx.deviation(),
         "target_freq": TARGET_FREQ,
         "harmonic": HARMONIC,
         "dev_eff": DEV_EFF,
         "trim_hz": TRIM_HZ,
         "rf_pin": rf_pin if rf_pin is not None else RF_PIN,
-        "power_ma": pico_fm.power(),
-        "led_pin": "ws2812" if LED_WS2812 else pico_fm.led_pin(),
+        "power_ma": pico_tx.power(),
+        "led_pin": "ws2812" if LED_WS2812 else pico_tx.led_pin(),
         "ws2812_pin": WS2812_PIN if LED_WS2812 else 16,
         "preemph": PREEMPH,
         "squelch": SQUELCH_PCT,
         "silence_mode": SILENCE_MODE,
-        "pdm_rate": pdm_rate if pdm_rate is not None else pico_fm.pdm_rate(),
-        "refdiv": refdiv if refdiv is not None else pico_fm.refdiv(),
+        "pdm_rate": pdm_rate if pdm_rate is not None else pico_tx.pdm_rate(),
+        "refdiv": refdiv if refdiv is not None else pico_tx.refdiv(),
+        "mode": MODE,
+        "service": SERVICE,
+        "console": CONSOLE_ON,
     })
 
 
 def apply_runtime_cfg(cfg, start_ws2812=False):
     """Re-apply persisted power/LED/pre-emphasis/squelch/silence-gate after a
-    PLL init (fm_modulator_init resets them).  Used at boot."""
+    PLL init (tx_modulator_init resets them).  Used at boot."""
     global PREEMPH, SQUELCH_PCT, LED_WS2812, WS2812_PIN, SILENCE_MODE
     power_ma = cfg_int(cfg, "power_ma", 12)
     if power_ma not in (2, 4, 8, 12):
         power_ma = 12
-    pico_fm.set_power(power_ma)
+    pico_tx.set_power(power_ma)
     pre = cfg.get("preemph", DEFAULT_PREEMPH)
     if pre not in ("on", "50", "75", "300", "off"):
         pre = DEFAULT_PREEMPH
     PREEMPH = pre
     if pre == "off":
-        pico_fm.set_preemphasis(False)
+        pico_tx.set_preemphasis(False)
     else:
-        pico_fm.set_preemphasis(True)
-        pico_fm.set_preemphasis_tc({"50": 50, "300": 300}.get(pre, 75))
+        pico_tx.set_preemphasis(True)
+        pico_tx.set_preemphasis_tc({"50": 50, "300": 300}.get(pre, 75))
     sq = cfg_int(cfg, "squelch", DEFAULT_SQUELCH)
     if not (0 <= sq <= 100):
         sq = DEFAULT_SQUELCH
@@ -511,13 +590,13 @@ def apply_runtime_cfg(cfg, start_ws2812=False):
         smode = "auto"
     SILENCE_MODE = smode
     if smode == "auto":
-        pico_fm.set_silence_gate(silence_gate_resolve(TARGET_FREQ))
+        pico_tx.set_silence_gate(silence_gate_resolve(TARGET_FREQ))
     else:
-        pico_fm.set_silence_gate(smode == "gate")
+        pico_tx.set_silence_gate(smode == "gate")
     # NFM voice-band chain (300Hz HP + 3kHz LP) on the same non-broadcast
     # bands as the gate; broadcast FM keeps the 15kHz audio band.
-    pico_fm.set_nfm_audio(silence_gate_resolve(TARGET_FREQ))
-    pico_fm.set_squelch(SQUELCH_PCT * 32767 // 100)
+    pico_tx.set_nfm_audio(silence_gate_resolve(TARGET_FREQ))
+    pico_tx.set_squelch(SQUELCH_PCT * 32767 // 100)
     led_pin = cfg.get("led_pin", 25)
     if led_pin == "ws2812":
         LED_WS2812 = True
@@ -525,7 +604,7 @@ def apply_runtime_cfg(cfg, start_ws2812=False):
         if not (0 <= wpin <= 29):
             wpin = 16
         WS2812_PIN = wpin
-        pico_fm.set_led_mode(0)  # plain-LED path off; Python drives the NeoPixel
+        pico_tx.set_led_mode(0)  # plain-LED path off; Python drives the NeoPixel
         if start_ws2812:
             start_ws2812_vu(WS2812_PIN)
     else:
@@ -533,8 +612,8 @@ def apply_runtime_cfg(cfg, start_ws2812=False):
         led_pin = cfg_int(cfg, "led_pin", 25)
         if not (0 <= led_pin <= 29):
             led_pin = 25
-        pico_fm.set_led_pin(led_pin)
-        pico_fm.set_led_mode(3)  # LED follows the audio level
+        pico_tx.set_led_pin(led_pin)
+        pico_tx.set_led_mode(3)  # LED follows the audio level
 
 
 def band_apply(target, dev_eff, pin):
@@ -548,7 +627,7 @@ def band_apply(target, dev_eff, pin):
     # carrier is parked for silence - a leftover refdiv 2 on FM changes the
     # parked PDM pattern and puts an audible idle tone on the silent carrier
     # (this is what broke the FM pause-silence after a previous UHF session).
-    pico_fm.set_refdiv(refdiv_for(target))
+    pico_tx.set_refdiv(refdiv_for(target))
     SILENCE_MODE = "auto"   # band-derived: FM parks the carrier, NFM gates it
     save_current(rf_pin=pin)
     if HARMONIC > 1:
@@ -564,7 +643,7 @@ def band_apply(target, dev_eff, pin):
 
 def start_ws2812_vu(pin):
     """Drive a WS2812 (NeoPixel, e.g. the RP2040-Zero onboard LED on GPIO16)
-    as the status LED: follows pico_fm.led_mode() (0=off, 1=white always,
+    as the status LED: follows pico_tx.led_mode() (0=off, 1=white always,
     2=white while streaming, 3=audio-level green->yellow->red VU).  Runs on a
     30 Hz soft timer so it works alongside the console."""
     from machine import Timer
@@ -575,7 +654,7 @@ def start_ws2812_vu(pin):
 
     def tick(t):
         try:
-            mode = pico_fm.led_mode()
+            mode = pico_tx.led_mode()
             if mode != last_mode[0]:
                 last_mode[0] = mode
                 if mode == 0:
@@ -585,9 +664,9 @@ def start_ws2812_vu(pin):
             elif mode == 1:
                 np[0] = (255, 255, 255)
             elif mode == 2:
-                np[0] = (255, 255, 255) if pico_fm.audio_active() else (0, 0, 0)
+                np[0] = (255, 255, 255) if pico_tx.audio_active() else (0, 0, 0)
             else:  # mode 3: VU meter
-                raw = pico_fm.samples(256)
+                raw = pico_tx.samples(256)
                 pk = 0
                 for v in array.array("h", raw):
                     a = v if v >= 0 else -v
@@ -613,55 +692,60 @@ def start_ws2812_vu(pin):
 
 
 def show_status():
-    lo, hi = pico_fm.range()
-    cf = pico_fm.current_freq()
-    print("----- RP2040 RF Transmitter status -----")
-    print("PLL ready      : %s" % ("yes" if pico_fm.ready() else "NO"))
+    lo, hi = pico_tx.range()
+    cf = pico_tx.current_freq()
+    print("----- pico-tx status -----")
+    print("PLL ready      : %s" % ("yes" if pico_tx.ready() else "NO"))
+    print("Mode           : %s" % pico_tx.mode())
+    if pico_tx.mode() == "tone":
+        print("Tone           : %s" % ("%d Hz" % pico_tx.tone_hz() if pico_tx.tone_on() else "off"))
+    elif pico_tx.mode() in ("fsk", "ook", "psk"):
+        print("Symbols queue  : %d pending" % pico_tx.pending())
     print("RF output      : %s (GPIO%d)" % ("ON" if RF_ON else "OFF", RF_PIN))
     if HARMONIC > 1:
         print("Carrier        : %.3f MHz effective (fundamental %.3f MHz x%d)"
-              % (TARGET_FREQ / 1e6, pico_fm.carrier() / 1e6, HARMONIC))
+              % (TARGET_FREQ / 1e6, pico_tx.carrier() / 1e6, HARMONIC))
         print("PLL range      : %.3f..%.3f MHz (fundamental)" % (lo / 1e6, hi / 1e6))
     else:
         print("Carrier        : %.3f MHz (PLL range %.3f..%.3f MHz)"
-              % (pico_fm.carrier() / 1e6, lo / 1e6, hi / 1e6))
+              % (pico_tx.carrier() / 1e6, lo / 1e6, hi / 1e6))
     print("Last ISR freq  : %s" % ("%.3f MHz" % (cf / 1e6) if cf else "(ISR never ran)"))
     if HARMONIC > 1:
         print("Deviation      : %.1f kHz effective (%.1f kHz fundamental)"
-              % (DEV_EFF / 1e3, pico_fm.deviation() / 1e3))
+              % (DEV_EFF / 1e3, pico_tx.deviation() / 1e3))
     else:
-        print("Deviation      : %.1f kHz" % (pico_fm.deviation() / 1e3))
+        print("Deviation      : %.1f kHz" % (pico_tx.deviation() / 1e3))
     print("Audio routing  : %s" % ("ON" if AUDIO_ON else "OFF"))
-    print("Host streaming : %s" % ("yes" if pico_fm.audio_active() else "no"))
-    print("Ring buffer    : %d%% full" % pico_fm.ring_level())
+    print("Host streaming : %s" % ("yes" if pico_tx.audio_active() else "no"))
+    print("Ring buffer    : %d%% full" % pico_tx.ring_level())
     u, d = ring_stats()
     if u is not None:
         print("Ring drift     : %d underflows, %d drops" % (u, d))
-    print("Volume         : %d%%" % vol_pct(pico_fm.volume()))
-    print("Mute           : %s" % ("yes" if pico_fm.muted() else "no"))
+    print("Volume         : %d%%" % vol_pct(pico_tx.volume()))
+    print("Mute           : %s" % ("yes" if pico_tx.muted() else "no"))
     pre_txt = {"on": "on (75us)", "50": "on (50us)", "300": "on (300us)", "off": "off"}.get(PREEMPH, "on (75us)")
     print("Pre-emphasis   : %s" % pre_txt)
     sq_txt = "off" if SQUELCH_PCT == 0 else "%d%%" % SQUELCH_PCT
     print("Squelch        : %s" % sq_txt)
-    gate_on = pico_fm.silence_gate()
-    gated_now = pico_fm.rf_gated()
+    gate_on = pico_tx.silence_gate()
+    gated_now = pico_tx.rf_gated()
     if gate_on:
         print("Silence        : gate (RF keyed off when silent%s)"
               % (" - gated now" if gated_now else ""))
     else:
         print("Silence        : park (unmodulated carrier on fc)")
-    print("Audio band     : %s" % ("voice (300Hz HP, 3kHz LP)" if pico_fm.nfm_audio()
+    print("Audio band     : %s" % ("voice (300Hz HP, 3kHz LP)" if pico_tx.nfm_audio()
                                   else "broadcast (15kHz LP)"))
     if TRIM_HZ:
         print("Trim           : %+d Hz effective (%+d Hz fundamental)"
               % (TRIM_HZ, round(TRIM_HZ / HARMONIC)))
-    print("Clips          : %d (since boot)" % pico_fm.clips())
-    print("RF power       : %d mA" % pico_fm.power())
+    print("Clips          : %d (since boot)" % pico_tx.clips())
+    print("RF power       : %d mA" % pico_tx.power())
     print("PDM dither     : %d MHz (PLL refdiv %d, step %s)"
-          % (pico_fm.pdm_rate(), pico_fm.refdiv(), pll_step_str()))
+          % (pico_tx.pdm_rate(), pico_tx.refdiv(), pll_step_str()))
     print("LED           : %s, mode %d (0=off 1=always 2=stream 3=VU)"
           % ("WS2812 GPIO%d" % WS2812_PIN if LED_WS2812
-             else "GPIO%d" % pico_fm.led_pin(), pico_fm.led_mode()))
+             else "GPIO%d" % pico_tx.led_pin(), pico_tx.led_mode()))
     print("---------------------------------")
 
 
@@ -711,7 +795,7 @@ def vbar():
     peak = 0
     print("vbar - audio level meter (T = squelch threshold), any key or Ctrl-C to stop")
     next_frame = time.ticks_ms()
-    last_clips = pico_fm.clips()
+    last_clips = pico_tx.clips()
     last_sec = next_frame
     clips_rate = 0
     silent = False
@@ -728,10 +812,10 @@ def vbar():
             continue
         # Clip rate, once per second (delta of the firmware clip counter).
         if now - last_sec >= 1000:
-            clips_rate = pico_fm.clips() - last_clips
+            clips_rate = pico_tx.clips() - last_clips
             last_clips += clips_rate
             last_sec = now
-        raw = pico_fm.samples(256)
+        raw = pico_tx.samples(256)
         pk = peak_of(raw)
         if pk > peak:
             peak = pk
@@ -748,7 +832,7 @@ def vbar():
         silent = False
         next_frame = now + 20  # ~50 fps
         nbars = peak * 40 // 32768
-        thr = pico_fm.squelch()
+        thr = pico_tx.squelch()
         thrpos = thr * 40 // 32768 if thr else -1
         row = []
         for i in range(40):
@@ -764,6 +848,7 @@ def vbar():
 
 def do_command(line):
     global RF_ON, AUDIO_ON, PREEMPH, SQUELCH_PCT, HARMONIC, TARGET_FREQ, DEV_EFF, SILENCE_MODE, TRIM_HZ
+    global MODE, SERVICE, CONSOLE_ON
     parts = line.split()
     if not parts:
         return True
@@ -783,7 +868,7 @@ def do_command(line):
                 else:
                     print(d)
         elif cmd == "ver":
-            print("RP2040 RF Transmitter v%s" % VERSION)
+            print("pico-tx v%s" % VERSION)
             print("Firmware sha256: %s" % FW_SHA256)
             try:
                 mpy = sys.implementation.version
@@ -809,7 +894,7 @@ def do_command(line):
                             (pick_harmonic(v) if v > HARMONIC_CEILING else 1)
                         fund = fundamental_of(v, h) + round(TRIM_HZ / h)
                         if h == HARMONIC and lo <= fund <= hi:
-                            pico_fm.set_carrier(fund)
+                            pico_tx.set_carrier(fund)
                             TARGET_FREQ = v
                             print("carrier set to %.3f MHz (live)" % (v / 1e6))
                         else:
@@ -829,7 +914,7 @@ def do_command(line):
                         v = clamp(v, REINIT_DEV_MIN, eff_max)
                         print("(clamped to %d Hz)" % v)
                     DEV_EFF = v
-                    pico_fm.set_deviation(dev_fund_of(v, HARMONIC))
+                    pico_tx.set_deviation(dev_fund_of(v, HARMONIC))
                     print("deviation set to %.1f kHz" % (DEV_EFF / 1e3))
         elif cmd == "reinit":
             if arg is None or arg2 is None:
@@ -871,7 +956,7 @@ def do_command(line):
                 print("  Note: on hardware, rates >1MHz measured WORSE - keep 1.")
                 print("  Saves and reboots to apply.")
             else:
-                pico_fm.set_pdm_rate(int(arg))
+                pico_tx.set_pdm_rate(int(arg))
                 save_current()
                 print("PDM rate set to %s MHz - rebooting..." % arg)
                 time.sleep_ms(100)
@@ -889,7 +974,7 @@ def do_command(line):
                 print("  Saves and reboots to apply.")
             else:
                 v = refdiv_for(TARGET_FREQ) if arg == "auto" else int(arg)
-                pico_fm.set_refdiv(v)
+                pico_tx.set_refdiv(v)
                 save_current()
                 print("REFDIV set to %d (%s) - rebooting..." % (v, arg))
                 time.sleep_ms(100)
@@ -912,7 +997,7 @@ def do_command(line):
                 target, dev = BANDS[arg.lower()]
                 # The UHF harmonic recipe and every gated (non-parked) band use
                 # refdiv 2: half the PDM step.  See refdiv_for().
-                pico_fm.set_refdiv(refdiv_for(target))
+                pico_tx.set_refdiv(refdiv_for(target))
                 h = pick_harmonic(target)
                 fund = fundamental_of(target, h)
                 if h > 1 and 118_000_000 <= fund <= 137_000_000:
@@ -934,7 +1019,7 @@ def do_command(line):
             else:
                 SILENCE_MODE = arg
                 gate = silence_gate_resolve(TARGET_FREQ) if arg == "auto" else (arg == "gate")
-                pico_fm.set_silence_gate(gate)
+                pico_tx.set_silence_gate(gate)
                 save_current()
                 print("silence mode: %s (RF %s when silent)"
                       % (arg, "off" if gate else "parked on fc"))
@@ -951,7 +1036,7 @@ def do_command(line):
                     TRIM_HZ = v
                     fund = fundamental_of(TARGET_FREQ, HARMONIC) + round(TRIM_HZ / HARMONIC)
                     if lo <= fund <= hi:
-                        pico_fm.set_carrier(fund)
+                        pico_tx.set_carrier(fund)
                         save_current()
                         print("trim %+d Hz effective (%+d Hz fundamental), carrier live"
                               % (TRIM_HZ, round(TRIM_HZ / HARMONIC)))
@@ -989,16 +1074,138 @@ def do_command(line):
             if arg not in ("on", "off"):
                 print("usage: rf on|off")
             else:
-                pico_fm.enable_output(arg == "on")
+                pico_tx.enable_output(arg == "on")
                 RF_ON = arg == "on"
                 print("RF output %s" % arg)
         elif cmd == "audio":
             if arg not in ("on", "off"):
                 print("usage: audio on|off")
             else:
-                pico_fm.audio(arg == "on")
+                pico_tx.audio(arg == "on")
                 AUDIO_ON = arg == "on"
                 print("audio routing %s" % arg)
+        elif cmd == "mode":
+            if arg is None:
+                print("mode: %s" % pico_tx.mode())
+                print("usage: mode <fm|tone|fsk|ook|cw|chirp|psk>")
+            elif arg in ("fm", "tone", "fsk", "ook", "cw", "chirp", "psk"):
+                MODE = arg
+                pico_tx.set_mode(arg)
+                if arg == "fm":
+                    pico_tx.audio(AUDIO_ON)
+                else:
+                    pico_tx.tone_stop()
+                    pico_tx.start()
+                print("mode -> %s" % arg)
+            else:
+                print("usage: mode <fm|tone|fsk|ook|cw|chirp|psk>")
+        elif cmd == "tx":
+            if arg not in ("on", "off"):
+                print("usage: tx on|off  (start/stop the modulation engine)")
+            else:
+                if arg == "on":
+                    pico_tx.start()
+                else:
+                    pico_tx.stop()
+                print("tx %s" % arg)
+        elif cmd == "tone":
+            if arg is None or arg == "off":
+                pico_tx.tone_stop()
+                print("tone off")
+            else:
+                hz = parse_int(arg, "tone Hz")
+                hz2 = parse_int(arg2, "tone2 Hz") if arg2 is not None else 0
+                lvl = parse_int(parts[3], "tone level %") if len(parts) > 3 else 100
+                if None not in (hz, hz2, lvl) and 0 <= hz <= 20000 \
+                        and 0 <= hz2 <= 20000 and 0 <= lvl <= 100:
+                    MODE = "tone"
+                    pico_tx.tone(hz, hz2 or 0, lvl)
+                    pico_tx.start()
+                    print("tone %d Hz%s at %d%% (FM deviation)"
+                          % (hz, (" + %d Hz" % hz2) if hz2 else "", lvl))
+                else:
+                    print("usage: tone <hz> [hz2] [level%% 0-100]  |  tone off")
+        elif cmd in ("fsk", "ook", "psk"):
+            if arg is None or arg2 is None:
+                print("usage: %s <baud> %s <hex-symbols>"
+                      % (cmd, "<shift_hz>" if cmd == "fsk" else ("<order 2|4>" if cmd == "psk" else "")))
+                print("  e.g. fsk 1200 4500 55aa0f  |  ook 2000 aaaa  |  psk 2400 2 abcd")
+            else:
+                baud = parse_int(arg, "baud")
+                data = None
+                if baud is None or baud <= 0:
+                    data = None
+                elif cmd == "fsk":
+                    shift = parse_int(arg2, "shift Hz")
+                    data = parse_hex_bytes(parts[3]) if len(parts) > 3 else None
+                    if shift is not None and data is not None:
+                        MODE = "fsk"
+                        pico_tx.fsk_config(baud, shift)
+                elif cmd == "psk":
+                    order = parse_int(arg2, "order 2|4")
+                    data = parse_hex_bytes(parts[3]) if len(parts) > 3 else None
+                    if order in (2, 4) and data is not None:
+                        MODE = "psk"
+                        pico_tx.psk_config(baud, order)
+                else:  # ook
+                    data = parse_hex_bytes(arg2)
+                    if data is not None:
+                        MODE = "ook"
+                        pico_tx.ook_config(baud)
+                if data is None:
+                    print("usage: %s <baud> ... <hex-symbols>" % cmd)
+                else:
+                    pico_tx.start()
+                    n = pico_tx.send(data)
+                    print("%s %d baud: queued %d/%d symbols (%d pending)"
+                          % (cmd.upper(), baud, n, len(data), pico_tx.pending()))
+        elif cmd == "cw":
+            text = " ".join(parts[1:])
+            if not text:
+                print("usage: cw <text>  (Morse on the carrier, 20 wpm)")
+            else:
+                MODE = "cw"
+                print("sending '%s'..." % text)
+                send_morse(text)
+                print("cw done")
+        elif cmd == "chirp":
+            if arg is None or arg == "off":
+                pico_tx.chirp_stop()
+                print("chirp stopped")
+            else:
+                f0 = parse_int(arg, "f0")
+                f1 = parse_int(arg2, "f1") if arg2 is not None else None
+                ms = parse_int(parts[3], "duration ms") if len(parts) > 3 else None
+                gap = parse_int(parts[4], "gap ms") if len(parts) > 4 else 0
+                rep = len(parts) > 5 and parts[5].lower() in ("1", "on", "yes", "repeat")
+                if None not in (f0, f1, ms) and ms > 0:
+                    MODE = "chirp"
+                    pico_tx.chirp(f0, f1, ms, gap, rep)
+                    pico_tx.start()
+                    print("chirp %d -> %d Hz over %d ms%s"
+                          % (f0, f1, ms, " (repeating)" if rep else ""))
+                else:
+                    print("usage: chirp <f0> <f1> <ms> [gap_ms] [repeat]  |  chirp off")
+        elif cmd == "service":
+            cmdline = line.split(None, 1)
+            if arg is None:
+                print("service: %s" % (SERVICE if SERVICE else "(none)"))
+                print("usage: service <console command...>  |  service off")
+            elif arg == "off":
+                SERVICE = ""
+                save_current()
+                print("boot service cleared")
+            else:
+                SERVICE = cmdline[1]
+                save_current()
+                print("boot service set: %s" % SERVICE)
+        elif cmd == "console":
+            if arg not in ("on", "off"):
+                print("usage: console on|off  (off = headless; Ctrl-C returns to the REPL)")
+            else:
+                CONSOLE_ON = arg == "on"
+                save_current()
+                print("console %s" % arg)
         elif cmd == "vol":
             if arg is None:
                 print("usage: vol <0-100>, e.g. vol 70")
@@ -1008,34 +1215,34 @@ def do_command(line):
                     if v < 0 or v > 100:
                         v = clamp(v, 0, 100)
                         print("(clamped to %d%%)" % v)
-                    pico_fm.set_volume(pct_to_vol(v))
-                    print("volume set to %d%%" % vol_pct(pico_fm.volume()))
+                    pico_tx.set_volume(pct_to_vol(v))
+                    print("volume set to %d%%" % vol_pct(pico_tx.volume()))
         elif cmd == "mute":
             if arg not in ("on", "off"):
                 print("usage: mute on|off")
             else:
-                pico_fm.set_mute(arg == "on")
+                pico_tx.set_mute(arg == "on")
                 print("mute %s" % arg)
         elif cmd == "pre":
             if arg in ("on", "off", "50", "75", "300"):
                 if arg in ("on", "75"):
                     PREEMPH = "on"
-                    pico_fm.set_preemphasis(True)
-                    pico_fm.set_preemphasis_tc(75)
+                    pico_tx.set_preemphasis(True)
+                    pico_tx.set_preemphasis_tc(75)
                     print("pre-emphasis on (75us)")
                 elif arg == "50":
                     PREEMPH = "50"
-                    pico_fm.set_preemphasis(True)
-                    pico_fm.set_preemphasis_tc(50)
+                    pico_tx.set_preemphasis(True)
+                    pico_tx.set_preemphasis_tc(50)
                     print("pre-emphasis on (50us)")
                 elif arg == "300":
                     PREEMPH = "300"
-                    pico_fm.set_preemphasis(True)
-                    pico_fm.set_preemphasis_tc(300)
+                    pico_tx.set_preemphasis(True)
+                    pico_tx.set_preemphasis_tc(300)
                     print("pre-emphasis on (300us - handheld radio)")
                 else:
                     PREEMPH = "off"
-                    pico_fm.set_preemphasis(False)
+                    pico_tx.set_preemphasis(False)
                     print("pre-emphasis off")
                 save_current()
             else:
@@ -1050,14 +1257,14 @@ def do_command(line):
                         print("error: squelch must be 0..100")
                     else:
                         SQUELCH_PCT = v
-                        pico_fm.set_squelch(v * 32767 // 100)
+                        pico_tx.set_squelch(v * 32767 // 100)
                         print("squelch %s" % ("off" if v == 0 else "%d%%" % v))
                         save_current()
         elif cmd == "led":
             if arg is None or arg not in ("0", "1", "2", "3"):
                 print("usage: led <0|1|2|3>  (0=off 1=always-on 2=stream 3=VU)")
             else:
-                pico_fm.set_led_mode(int(arg))
+                pico_tx.set_led_mode(int(arg))
                 print("LED mode %s" % arg)
         elif cmd == "ledpin":
             if arg is None:
@@ -1073,10 +1280,10 @@ def do_command(line):
                         print("error: ws2812 gpio must be 0..29")
                         wpin = None
                 if wpin is not None:
-                    save_cfg({"carrier": pico_fm.carrier(),
-                              "deviation": pico_fm.deviation(),
+                    save_cfg({"carrier": pico_tx.carrier(),
+                              "deviation": pico_tx.deviation(),
                               "rf_pin": RF_PIN,
-                              "power_ma": pico_fm.power(),
+                              "power_ma": pico_tx.power(),
                               "led_pin": "ws2812",
                               "ws2812_pin": wpin,
                               "preemph": PREEMPH,
@@ -1090,10 +1297,10 @@ def do_command(line):
                     if v < 0 or v > 29:
                         print("error: ledpin must be 0..29 or 'ws2812'")
                     else:
-                        save_cfg({"carrier": pico_fm.carrier(),
-                                  "deviation": pico_fm.deviation(),
+                        save_cfg({"carrier": pico_tx.carrier(),
+                                  "deviation": pico_tx.deviation(),
                                   "rf_pin": RF_PIN,
-                                  "power_ma": pico_fm.power(),
+                                  "power_ma": pico_tx.power(),
                                   "led_pin": v,
                                   "preemph": PREEMPH,
                                   "squelch": SQUELCH_PCT})
@@ -1105,8 +1312,8 @@ def do_command(line):
                 print("usage: pwr <2|4|8|12>  (RF output drive strength in mA; "
                       "higher = stronger signal, more harmonics)")
             else:
-                pico_fm.set_power(int(arg))
-                print("RF power set to %d mA" % pico_fm.power())
+                pico_tx.set_power(int(arg))
+                print("RF power set to %d mA" % pico_tx.power())
                 save_current()
         elif cmd == "cls":
             # ANSI clear-screen + home; works on most serial terminals.
@@ -1114,13 +1321,13 @@ def do_command(line):
         elif cmd == "vbar":
             vbar()
         elif cmd == "ring":
-            print("ring buffer %d%% full" % pico_fm.ring_level())
+            print("ring buffer %d%% full" % pico_tx.ring_level())
         elif cmd == "pwm":
-            top, div, csr, clk = pico_fm.pwm_info()
-            cost = pico_fm.isr_cost()
-            i0 = pico_fm.diag()[0]
+            top, div, csr, clk = pico_tx.pwm_info()
+            cost = pico_tx.isr_cost()
+            i0 = pico_tx.diag()[0]
             time.sleep_ms(1000)
-            i1 = pico_fm.diag()[0]
+            i1 = pico_tx.diag()[0]
             print("clk_sys     : %d Hz" % clk)
             print("PWM slice7  : TOP=%d DIV=0x%04X CSR=0x%02X"
                   "  (INT=1 FRAC=0 -> /1.0, wrap 48kHz)" % (top, div, csr))
@@ -1136,10 +1343,10 @@ def do_command(line):
                 if v is None:
                     return
                 secs = max(1, min(60, v))
-            i0, r0 = pico_fm.diag()
+            i0, r0 = pico_tx.diag()
             u0, d0 = ring_stats()
             time.sleep_ms(secs * 1000)
-            i1, r1 = pico_fm.diag()
+            i1, r1 = pico_tx.diag()
             u1, d1 = ring_stats()
             di, dr = i1 - i0, r1 - r0
             print("window    : %d s, PWM ticks +%d (~%.0f/s over this window)"
@@ -1166,7 +1373,7 @@ def do_command(line):
                     print("            ~%.1f ppm clock offset (%.1f events/s)"
                           % ((du + dd) * 1e6 / max(di, 1), (du + dd) / secs))
             print("ring %d%% full, last ISR freq %.3f MHz"
-                  % (pico_fm.ring_level(), pico_fm.current_freq() / 1e6))
+                  % (pico_tx.ring_level(), pico_tx.current_freq() / 1e6))
         elif cmd == "sweep":
             vlo = parse_int(arg if arg is not None else str(lo), "sweep lo")
             vhi = parse_int(arg2 if arg2 is not None else str(hi), "sweep hi")
@@ -1182,18 +1389,18 @@ def do_command(line):
                     print("sweeping %.3f..%.3f MHz step %.0f kHz (audio paused%s)"
                           % (vlo / 1e6, vhi / 1e6, vstep / 1e3,
                              "; radio hears x%d" % HARMONIC if HARMONIC > 1 else ""))
-                    pico_fm.audio(False)
+                    pico_tx.audio(False)
                     f = vlo
                     while f <= vhi:
-                        pico_fm.set_freq(f)
+                        pico_tx.set_freq(f)
                         time.sleep_ms(80)
                         f += vstep
-                    pico_fm.audio(AUDIO_ON)
+                    pico_tx.audio(AUDIO_ON)
                     print("sweep done")
         elif cmd == "pll":
-            cf = pico_fm.current_freq()
+            cf = pico_tx.current_freq()
             print("ready: %s, range %.3f..%.3f MHz, last ISR freq: %s"
-                  % ("yes" if pico_fm.ready() else "no", lo / 1e6, hi / 1e6,
+                  % ("yes" if pico_tx.ready() else "no", lo / 1e6, hi / 1e6,
                      "%.3f MHz" % (cf / 1e6) if cf else "(ISR never ran)"))
         elif cmd == "exit":
             print("bye")
@@ -1209,10 +1416,10 @@ def do_command(line):
 def wait_terminal():
     """Wait until a terminal/serial program actually has the CDC port open
     (DTR asserted), so the banner is printed to a live console."""
-    if pico_fm.cdc_connected():
+    if pico_tx.cdc_connected():
         return
     print("waiting for a terminal connection...", end="")
-    while not pico_fm.cdc_connected():
+    while not pico_tx.cdc_connected():
         time.sleep_ms(250)
     print(" connected.")
 
@@ -1223,6 +1430,7 @@ def do_setup():
     restarts it instead of dropping to the plain REPL."""
     global RF_PIN, LED_WS2812, WS2812_PIN, PREEMPH, SQUELCH_PCT
     global HARMONIC, TARGET_FREQ, DEV_EFF, TRIM_HZ
+    global MODE, SERVICE, CONSOLE_ON
     cfg = load_cfg()
     rf_pin = cfg_int(cfg, "rf_pin", RF_PIN)
     if rf_pin not in (21, 23, 24, 25):
@@ -1262,15 +1470,15 @@ def do_setup():
     refdiv = cfg_int(cfg, "refdiv", 0)
     if refdiv not in (1, 2):
         refdiv = refdiv_for(TARGET_FREQ)   # unset / invalid -> auto
-    pico_fm.set_refdiv(refdiv)
+    pico_tx.set_refdiv(refdiv)
     pdm_rate = cfg_int(cfg, "pdm_rate", 1)
     if not (1 <= pdm_rate <= 4):
         pdm_rate = 1
-    pico_fm.set_pdm_rate(pdm_rate)
+    pico_tx.set_pdm_rate(pdm_rate)
 
     ok = False
     try:
-        pico_fm.init(carrier, deviation, RF_PIN)
+        pico_tx.init(carrier, deviation, RF_PIN)
         ok = True
     except ValueError as exc:
         # refdiv 2 halves the PDM step but narrows the reachable PLL window;
@@ -1281,9 +1489,9 @@ def do_setup():
             print("NOTE: %s" % exc)
             print("Retrying with refdiv 1 (wider PLL window, larger PDM step)")
             refdiv = 1
-            pico_fm.set_refdiv(1)
+            pico_tx.set_refdiv(1)
             try:
-                pico_fm.init(carrier, deviation, RF_PIN)
+                pico_tx.init(carrier, deviation, RF_PIN)
                 ok = True
                 save_current(refdiv=1)   # do not repeat the probe every boot
             except ValueError as exc2:
@@ -1299,20 +1507,41 @@ def do_setup():
             HARMONIC = 1
             TARGET_FREQ = DEFAULT_CARRIER
             DEV_EFF = DEFAULT_DEVIATION
-            pico_fm.set_refdiv(refdiv_for(DEFAULT_CARRIER))
+            pico_tx.set_refdiv(refdiv_for(DEFAULT_CARRIER))
             try:
-                pico_fm.init(DEFAULT_CARRIER, DEFAULT_DEVIATION, RF_PIN)
+                pico_tx.init(DEFAULT_CARRIER, DEFAULT_DEVIATION, RF_PIN)
                 ok = True
             except ValueError as exc2:
                 print("ERROR: default config also failed: %s" % exc2)
     if ok:
-        pico_fm.enable_output(True)
-        pico_fm.audio(True)
+        pico_tx.enable_output(True)
+        MODE = cfg.get("mode", "fm")
+        if MODE not in ("fm", "tone", "fsk", "ook", "cw", "chirp", "psk"):
+            MODE = "fm"
+        if MODE == "fm":
+            pico_tx.audio(AUDIO_ON)
+        else:
+            pico_tx.set_mode(MODE)
+            pico_tx.start()
         apply_runtime_cfg(cfg, start_ws2812=True)
+    # Boot service (headless transmit): run one console command automatically.
+    SERVICE = cfg.get("service", "")
+    if not isinstance(SERVICE, str):
+        SERVICE = ""
+    CONSOLE_ON = bool(cfg.get("console", True))
+    if SERVICE:
+        print("boot service: %s" % SERVICE)
+        try:
+            do_command(SERVICE)
+        except Exception as e:
+            print("(service error: %s)" % e)
+    if not CONSOLE_ON:
+        print("headless mode (console off; Ctrl-C returns to the REPL)")
+        return
     # Only now wait for a terminal, then print the banner to it.
     wait_terminal()
     print("==============================================")
-    print(" RP2040 RF Transmitter console v%s" % VERSION)
+    print(" pico-tx console v%s" % VERSION)
     if HARMONIC > 1:
         print(" carrier %.3f MHz (fundamental %.3f MHz x%d), deviation %.1f kHz,"
               " GPIO%d"
@@ -1323,7 +1552,7 @@ def do_setup():
               % (carrier / 1e6, deviation / 1e3, RF_PIN))
     print("==============================================")
     if ok:
-        print("Select 'RP2040 RF Transmitter' as audio output.")
+        print("Select 'pico-tx' as audio output.")
         show_status()
     print("Type 'help' for the full command list.")
 
@@ -1332,7 +1561,7 @@ def console_loop():
     """The interactive prompt.  Returns only when the user types 'exit'."""
     while True:
         try:
-            line = input("fm> ")
+            line = input("tx> ")
         except KeyboardInterrupt:
             # A Ctrl-C at the prompt (e.g. Thonny connect): just re-prompt.
             print("\n(interrupted - type 'exit' to return to the REPL)")
@@ -1362,8 +1591,13 @@ def main():
             time.sleep_ms(300)
             if attempts >= 10:
                 print("setup still failing after 10 tries - continuing to console")
-                print("(if this repeats, /fm_cfg.json may be corrupt: type 'reset' to restore defaults)")
+                print("(if this repeats, /tx_cfg.json may be corrupt: type 'reset' to restore defaults)")
                 break
+    if not CONSOLE_ON:
+        # Headless service: keep the device alive running the boot service.
+        # Ctrl-C drops back to the MicroPython REPL for recovery.
+        while True:
+            time.sleep_ms(1000)
     while True:
         try:
             console_loop()

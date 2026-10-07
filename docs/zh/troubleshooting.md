@@ -45,7 +45,7 @@
 `tools/upload.sh` / `tools/serial.sh` 不会取“第一个串口”，而是按 USB ID 定位：
 
 1. `1209:fa50` —— **本固件自己的 ID**（写在
-   `ports/rp2/boards/RPI_PICO_FM/mpconfigboard.h` 的 `MICROPY_HW_USB_VID/PID`）。
+   `ports/rp2/boards/RPI_PICO_TX/mpconfigboard.h` 的 `MICROPY_HW_USB_VID/PID`）。
    它与板型无关：Pico / Pico W / RP2040-Zero / 克隆板只要刷了本固件，
    枚举出来都是这个 ID。
 2. 通用 MicroPython RP2040（`2e8a:0005` 或描述含 MicroPython）—— 板子**还没刷**

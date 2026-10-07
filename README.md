@@ -1,46 +1,67 @@
-# RP2040 FM Transmitter
+# pico-tx
 
-**Version 0.24.0** — MicroPython USB sound card + FM transmitter
+**Version 0.1.0** — RP2040 general-purpose RF transmitter
 
-[中文](README.zh.md) · English · [Project](https://git.sr.ht/~bytewolf/rp2040-fm-transmitter)
+[中文](README.zh.md) · English · Based on [rp2040-fm-transmitter](https://git.sr.ht/~bytewolf/rp2040-fm-transmitter)
 
-Turn a Raspberry Pi Pico (RP2040) into a **USB sound card + FM transmitter**:
+Turn a Raspberry Pi Pico (RP2040) into a **general-purpose RF transmitter**
+built on the [pico-fractional-pll](https://github.com/kaduhi/pico-fractional-pll)
+technique (RF square wave on GPIO21, no DAC/analog stage):
 
-- Plugged into a PC it enumerates as a USB sound card (UAC1, 48kHz/16-bit/stereo);
-  whatever the PC plays is streamed to the Pico over USB;
-- The audio is FM-modulated in real time onto **87.9 MHz** (configurable:
-  broadcast FM 88-108M, 2m amateur 144-148M, and UHF 409/433/440M via the
-  3rd/5th harmonic of a <=150MHz fundamental) using the
-  [pico-fractional-pll](https://github.com/kaduhi/pico-fractional-pll)
-  technique, output on GPIO21;
-- MicroPython provides an interactive **`fm>` serial console**: carrier /
-  deviation / power / pre-emphasis / volume controls, a live level bar, and
-  PLL diagnostics.
+- **All modulation runs in firmware** (the 48 kHz PWM ISR); MicroPython is
+  only the control layer and never touches the real-time path;
+- A **USB sound card** (UAC1, 48kHz/16-bit/stereo) is one of several signal
+  sources: whatever the PC plays is FM-modulated onto the carrier;
+- Additional transmit schemes selectable from the `tx>` console: internal
+  tone (DDS), FSK, OOK, CW (Morse), linear chirp and BPSK/QPSK;
+- Carrier configurable across broadcast FM 88-108M, 2m amateur 144-148M and
+  UHF 409/433/440M (via the 3rd/5th harmonic of a <=150MHz fundamental).
+
+| mode | source | modulation | typical use |
+|------|--------|------------|-------------|
+| `fm` | USB audio | FM | play PC audio to an FM radio |
+| `tone` | internal DDS | FM | test tone / CTCSS / DTMF |
+| `fsk` | symbol FIFO | 2-FSK | RTTY / packet / paging |
+| `ook` | symbol FIFO | on/off keying | remote controls |
+| `cw` | key line | Morse | beacon / keyed carrier |
+| `chirp` | internal | linear sweep | FMCW / sweep testing |
+| `psk` | symbol FIFO | BPSK/QPSK | constant-envelope data |
 
 > **⚠️ LEGAL WARNING**: GPIO21 drives a strong RF square wave. **Do NOT attach
 > an antenna.** Unlicensed radiation is illegal in most countries. For testing,
 > put an FM radio within a few centimetres of the Pico.  On the UHF harmonic
 > bands the *fundamental* also radiates: for 409MHz it sits in the AERONAUTICAL
 > band (118-137MHz) - a band-pass filter is mandatory before radiating there.
+> Digital schemes (FSK/OOK/PSK) have wider spectra than narrowband FM; check
+> the harmonics and splatter before any radiated use.
 
 ---
 
 ## Quick start
 
-1. Flash `firmware/rp2040pico_fm_firmware.uf2` (BOOTSEL drag & drop, or
+1. Flash `firmware/picotx_firmware.uf2` (BOOTSEL drag & drop, or
    `tools/flash.sh`);
 2. Upload the console script:
    ```
    tools/upload.sh
    ```
-   (This handles the FM console holding the REPL - a plain `mpremote cp`
+   (This handles the console holding the REPL - a plain `mpremote cp`
    fails with "could not enter raw repl".  Equivalent manual steps: in a
-   serial terminal type `exit` at the `fm>` prompt, then
+   serial terminal type `exit` at the `tx>` prompt, then
    `mpremote resume fs cp python/main.py :main.py`.)
 3. Replug (or press RESET), wait 2-3 s, open a serial terminal (115200) — the
-   `fm>` console appears automatically;
-4. On the PC select **"RP2040 RF Transmitter"** as the audio output and play;
+   `tx>` console appears automatically;
+4. On the PC select **"pico-tx"** as the audio output and play;
 5. Tune an FM radio to **87.9 MHz**.
+
+Transmitting without a PC (`tone`/`fsk`/`cw`/`chirp`/`psk`):
+
+```
+mode tone            # internal signal source
+tone 1000            # 1 kHz FM test tone
+mode cw              # Morse
+cw CQ CQ DE PICO TX
+```
 
 One-command band presets (save + reboot):
 
@@ -72,9 +93,9 @@ release/
 ├── LICENSE                    # MIT + third-party licence notes
 ├── build.sh                   # one-shot build (clone MicroPython + patch + build)
 ├── patches/
-│   └── micropython-fm.patch   # all our changes on top of MicroPython v1.29.0
+│   └── micropython-tx.patch   # all our changes on top of MicroPython v1.29.0
 ├── firmware/
-│   ├── rp2040pico_fm_firmware.uf2   # prebuilt firmware
+│   ├── picotx_firmware.uf2   # prebuilt firmware
 │   └── sha256.txt
 ├── python/
 │   └── main.py                # console script (copy to the board)
@@ -106,8 +127,8 @@ release/
 ## Build from source
 
 ```bash
-git clone git@git.sr.ht:~bytewolf/rp2040-fm-transmitter
-cd rp2040-fm-transmitter
+git clone <pico-tx-repo-url>
+cd pico-tx
 ./build.sh            # default MicroPython v1.29.0
 # or ./build.sh <tag-or-commit>
 ```
@@ -147,7 +168,7 @@ Chinese versions live under [docs/zh/](docs/zh/); see the
   are shipped as a patch;
 - [pico-fractional-pll](https://github.com/kaduhi/pico-fractional-pll)
   (BSD-3-Clause, Kazuhisa Terasaki) — **its core source is incorporated into
-  our patch** (`ports/rp2/fm_transmitter/pico_fractional_pll.c/.h`); keep the
+  our patch** (`ports/rp2/tx/pico_fractional_pll.c/.h`); keep the
   attribution; it is not a separate build dependency;
 - [kaduhi/pico-playground (fm_transmitter branch)](https://github.com/kaduhi/pico-playground)
   — **reference only** (UAC1 descriptors and FM modulation ideas); no code

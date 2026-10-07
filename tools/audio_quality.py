@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Host-side fixed-point replica of the FM audio chain.
 
-This ports the fixed-point arithmetic of `fm_modulator.c: fm_audio_process()`
+This ports the fixed-point arithmetic of `tx_modulator.c: tx_audio_process()`
 (exact coefficient constants, int16 truncation and int32 wrapping) so the
 transmitted-sound quality can be measured **on the host**, without flashing
 or probing hardware.
@@ -26,7 +26,7 @@ import numpy as np
 
 FS = 48_000
 
-# --- constants copied verbatim from ports/rp2/fm_transmitter/fm_modulator.c --
+# --- constants copied verbatim from ports/rp2/tx/tx_modulator.c --
 FM_LP15_A_Q15 = 28168    # a = 1 - exp(-2*pi*15000/48000)  (15 kHz LP)
 FM_LP3K_A_Q15 = 10644    # a = 1 - exp(-2*pi*3000/48000)   (3 kHz LP)
 FM_HP300_A_Q15 = 31509   # a = exp(-2*pi*300/48000)        (300 Hz HP)
@@ -53,7 +53,7 @@ def i32(v):
 
 
 class Chain:
-    """Replica of fm_audio_process() state and arithmetic."""
+    """Replica of tx_audio_process() state and arithmetic."""
 
     def __init__(self, preemph=True, tc_us=75, nfm=False, squelch=0, lponly=False):
         self.preemph = preemph
@@ -148,7 +148,7 @@ def sine(f, n, amp):
     return np.rint(amp * np.sin(2 * np.pi * f * t)).astype(np.int64)
 
 
-# --- improved chain (fm_modulator.c after the audio-quality rework) ---------
+# --- improved chain (tx_modulator.c after the audio-quality rework) ---------
 FM_PRE_G_Q10 = {50: 2458, 75: 3686, 300: 14746}
 FM_BQ = {
     "wide": [(20188, 40377, 20188, 25338, 22648),
@@ -176,7 +176,7 @@ def biquad_run(q, x):
 
 
 class NewChain:
-    """Replica of fm_audio_process() after the audio-quality rework:
+    """Replica of tx_audio_process() after the audio-quality rework:
     DC block -> 300 Hz HP (nfm) -> pre-emphasis -> band-limit -> limiter."""
 
     def __init__(self, preemph=True, tc_us=75, nfm=False, squelch=0):
@@ -378,7 +378,7 @@ def cmd_mono(a):
 def cmd_volume(a):
     """UAC1 volume mapping: old linear dB->gain vs the new table.
 
-    Mirrors fm_modulator.c fm_db256_to_gain()/fm_gain_to_db256() exactly.
+    Mirrors tx_modulator.c tx_db256_to_gain()/tx_gain_to_db256() exactly.
     """
     tbl = [32767, 29204, 26028, 23197, 20675, 18426, 16422, 14636,
            13045, 11626, 10362, 9235, 8231, 7336, 6538, 5827,
@@ -407,7 +407,7 @@ def cmd_volume(a):
     def db(g):
         return -999.0 if g <= 0 else 20 * np.log10(g / 32767.0)
 
-    def db256_new(gain):      # inverse search (fm_gain_to_db256)
+    def db256_new(gain):      # inverse search (tx_gain_to_db256)
         if gain > 32767:
             gain = 32767
         for i in range(60):

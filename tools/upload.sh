@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
-# upload.sh — push python/main.py to the Pico, working around the FM console.
+# upload.sh — push python/main.py to the Pico, working around the tx console.
 #
 # Why this is not a plain `mpremote cp`:
-#   main.py boots into the interactive FM console, which sits in input()
+#   main.py boots into the interactive tx console, which sits in input()
 #   and catches Ctrl-C by design.  mpremote needs the plain MicroPython
 #   REPL to upload files, so `mpremote cp` fails with
 #   "could not enter raw repl" (the console swallows the handshake).
 #
 # This script:
 #   1. resolves the board's CDC port by its USB IDs (tools/pico_port.sh,
-#      1209:fa50) so another ttyACM device - a PlutoSDR, an ST-Link, a
+#      1209:fa51) so another ttyACM device - a PlutoSDR, an ST-Link, a
 #      second Pico - cannot be picked by mistake;
 #   2. opens that port, probes the REPL state by sending CR (Enter) and
 #      watching for the prompt:
-#        "fm> "  -> the FM console is up: send `exit` (retried) so it
+#        "tx> "  -> the tx console is up: send `exit` (retried) so it
 #                   returns to the plain MicroPython REPL;
 #        ">>> "  -> already at the plain REPL: nothing to do;
 #      a leftover raw-REPL state (from a previous mpremote session) is
@@ -51,7 +51,7 @@ echo "==> board port: ${PORT}"
 # pyserial, which the console-exit step needs).
 MPY="$(head -1 "$(command -v mpremote)" | sed 's/^#!//')"
 
-# 1. Probe the REPL state and ask the FM console (if running) to exit.
+# 1. Probe the REPL state and ask the tx console (if running) to exit.
 echo "==> probing the REPL state..."
 "${MPY}" - "${PORT}" <<'EOF'
 import sys, time
@@ -93,11 +93,11 @@ for _ in range(5):
     if b">>>" in buf:
         state = "repl"
         break
-    if b"fm>" in buf:
+    if b"tx>" in buf:
         if sent < 3:
             s.write(b"exit\r\n")
             sent += 1
-            print("   FM console detected, sending 'exit' (try %d)" % sent)
+            print("   tx console detected, sending 'exit' (try %d)" % sent)
         buf += drain(1.0)
         if b">>>" in buf:
             state = "repl"

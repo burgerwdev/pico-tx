@@ -6,7 +6,7 @@ This document audits, layer by layer, the code in this repository that affects
 the **received** sound quality, and gives quantified limits plus an impact
 ranking. Every number comes from the host-side script
 `tools/audio_quality.py`, a line-by-line replica of the fixed-point semantics
-and coefficient constants of `fm_modulator.c: fm_audio_process()`.
+and coefficient constants of `tx_modulator.c: tx_audio_process()`.
 
 > **This analysis does not flash the board and does not measure hardware.**
 > Every number below is reproducible on the host with:
@@ -23,11 +23,11 @@ and coefficient constants of `fm_modulator.c: fm_audio_process()`.
 
 | Layer | Location | Limit | Audible effect | Priority |
 |---|---|---|---|---|
-| **L3 audio DSP chain** | `fm_modulator.c: fm_audio_process()` | non-standard pre-emphasis (+8.6 dB too much at 2 kHz, −6.3 dB too little at 15 kHz); two first-order band-limit poles (−2.2 dB at 10 kHz); no limiter look-ahead | **tonal error (midrange hump, dull top) + severe distortion on loud material (THD 18–26 %)** | **P0** |
+| **L3 audio DSP chain** | `tx_modulator.c: tx_audio_process()` | non-standard pre-emphasis (+8.6 dB too much at 2 kHz, −6.3 dB too little at 15 kHz); two first-order band-limit poles (−2.2 dB at 10 kHz); no limiter look-ahead | **tonal error (midrange hump, dull top) + severe distortion on loud material (THD 18–26 %)** | **P0** |
 | **L1 USB audio & asynchronous sample clock** | `shared/tinyusb/*`, `tud_audio_rx_done_isr()` | host 48 kHz and PWM 48 kHz come from two independent crystals; no resampler, no feedback endpoint, no drift counter | periodic clicks after long playback (starts after ~14 min and persists) | **P1** |
 | **L5 PLL/PDM RF layer** | `pico_fractional_pll.c` | the instantaneous frequency dithers by `ref/div` at 1 MHz; the PLL loop filter averages it only partially | RF phase noise / receiver noise floor (worst on narrowband and weak signals) | **P1** |
 | **L2 mono mix & ring buffer** | `tud_audio_rx_done_isr()`, `fm_pwm_wrap_handler()` | the mix itself is clean (no int32 overflow; anti-phase cancellation is inherent to mono); the ring has no drop/underflow counters and zeroes instead of holding | the mix is inaudible (−91.8 dBFS truncation); the ring hides L1 and turns a drop into a dropout | **P2** |
-| **L6 USB control surface & defaults** | `fm_modulator.c: fm_db256_to_gain()`, `main.py` | UAC1 volume maps **dB → linear gain** linearly, not dB → dB | volume slider is mis-calibrated (request −30 dB, get −6 dB) | **P2** |
+| **L6 USB control surface & defaults** | `tx_modulator.c: tx_db256_to_gain()`, `main.py` | UAC1 volume maps **dB → linear gain** linearly, not dB → dB | volume slider is mis-calibrated (request −30 dB, get −6 dB) | **P2** |
 | **L4 modulation mapping** | `fm_pwm_wrap_handler()` | `freq = carrier + (sample*dev)>>15` | none (0.99997× full deviation; negligible) | — |
 
 Rationale: L3 decides the tone and distortion and is 100 % verifiable on the
@@ -203,7 +203,7 @@ $ python3 tools/audio_quality.py mono
 
 ### L6 USB control surface & defaults (P2)
 
-`fm_db256_to_gain()` maps the UAC1 dB value **linearly** to a linear gain:
+`tx_db256_to_gain()` maps the UAC1 dB value **linearly** to a linear gain:
 
 ```c
 return (uint16_t)(((clamped - FM_VOL_MIN) * 32767) / (FM_VOL_MAX - FM_VOL_MIN));
@@ -324,10 +324,10 @@ Asynchronous sample-clock drift (see the L1 table)
 
 ## 4. Implemented changes and before/after data (host side)
 
-All three changes stay inside the fixed-point path of `fm_modulator.c` (no
+All three changes stay inside the fixed-point path of `tx_modulator.c` (no
 division, no floating point); `python3 tools/audio_quality.py compare`
 reproduces the tables below exactly. The patch was regenerated
-(`patches/micropython-fm.patch`) and **compiles** (`make BOARD=RPI_PICO_FM`;
+(`patches/micropython-tx.patch`) and **compiles** (`make BOARD=RPI_PICO_TX`;
 compile only, nothing was flashed).
 
 ### Change 1: standard pre-emphasis curve
@@ -392,7 +392,7 @@ keeps working.
 
 ### Change 4: hold-last on underflow + drop/underflow counters (L1/L2)
 
-- `fm_modulator.c`: an empty ring no longer always zeroes the sample. While
+- `tx_modulator.c`: an empty ring no longer always zeroes the sample. While
   the host is streaming (`s_audio_active`) and the empty run is shorter than
   480 ticks (10 ms), the previous sample is repeated (hold-last) and counted
   in `s_ring_underflows`. A longer empty run means the host really stopped, so
@@ -400,7 +400,7 @@ keeps working.
   behaviour is preserved).
 - a full ring now increments the new `s_ring_drops` (it used to be a silent
   drop).
-- exposed as `pico_fm.ring_stats() -> (underflows, drops)`; `diag` and
+- exposed as `pico_tx.ring_stats() -> (underflows, drops)`; `diag` and
   `status` print them (on older firmware `diag` says the interface is
   missing).
 
@@ -444,7 +444,7 @@ UAC1 feedback endpoint (see the upgrade path below).
   to refdiv 1 (a failed `init` never launches core1, so the retry is safe) and
   persists the 1.
 - `status` now shows the actual PDM step (the width of the window
-  `pico_fm.range()` returns is exactly one feedback-divider step).
+  `pico_tx.range()` returns is exactly one feedback-divider step).
 
 ```
 $ python3 tools/pll_range.py minstep 1800000 30000000 50000 3000 --refdiv 2
@@ -471,8 +471,8 @@ speculation).
 ### Change 6: real dB mapping for the UAC1 volume (L6)
 
 - new `fm_vol_table[61]` (one `round(32767*10^(dB/20))` per dB from 0 to
-  -60 dB); `fm_db256_to_gain()` interpolates between whole dB and the
-  1/256 dB remainder, and `fm_gain_to_db256()` searches the monotonic table
+  -60 dB); `tx_db256_to_gain()` interpolates between whole dB and the
+  1/256 dB remainder, and `tx_gain_to_db256()` searches the monotonic table
   (exact round trip).
 - only the two fixed-point helpers change; neither is on the ISR path and
   there is no floating point.
@@ -503,7 +503,7 @@ range (at −60 dB, i.e. already 60 dB of attenuation).
 | band-limit with pre-emphasis off | none (0.00 dB) | 20 kHz −34.7 dB |
 | worst step on an underflow | 27591 | **7053** |
 | THD during underflows | 0.035 % | **0.008 %** |
-| drop/underflow observability | no counters | `pico_fm.ring_stats()` |
+| drop/underflow observability | no counters | `pico_tx.ring_stats()` |
 | 2m PDM dither step | 1.2 MHz | **600 kHz** |
 | 30m PDM dither step | 80 kHz | **40 kHz** |
 | refdiv selection | `target > 150 MHz` only | **`refdiv_for()` + `refdiv auto`** |
@@ -541,22 +541,22 @@ range (at −60 dB, i.e. already 60 dB of attenuation).
 
 ```
 $ ./build.sh
-==> Building RPI_PICO_FM firmware, MicroPython ref: v1.29.0
+==> Building RPI_PICO_TX firmware, MicroPython ref: v1.29.0
     trying https://git.sr.ht/~bytewolf/micropython ...
     patch applied
     source: https://git.sr.ht/~bytewolf/micropython
 [100%] Built target firmware
-==> Done: firmware/rp2040pico_fm_firmware.uf2
+==> Done: firmware/picotx_firmware.uf2
    FLASH 350180 B / 640 KB (53.43%), RAM 36812 B / 256 KB (14.04%)
 ```
 
 - `./build.sh` completed end-to-end on a **clean clone** (clone → apply patch →
   `make submodules` → build); the resulting UF2 has sha256
   `810e9e0bd8599ef11051de81aa9a65a28e35ca4b39bf30caf9983b11f6018ebb`, and that
-  is what `firmware/rp2040pico_fm_firmware.uf2` holds (`sha256sum -c
+  is what `firmware/picotx_firmware.uf2` holds (`sha256sum -c
   firmware/sha256.txt` passes and `python/main.py`'s `FW_SHA256` matches).
 - **Patch round-trip**: regenerating the patch after applying
-  `patches/micropython-fm.patch` to a clean MicroPython gives **0 diff** against
+  `patches/micropython-tx.patch` to a clean MicroPython gives **0 diff** against
   the committed patch, i.e. the patch is self-consistent and reproduces this
   build exactly.
 

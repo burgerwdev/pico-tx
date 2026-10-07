@@ -4,22 +4,71 @@
 
 ## System architecture
 
+pico-tx separates **signal source**, **modulation scheme** and **channel**.
+All three meet in one place: the 48 kHz PWM-wrap ISR, which is the only
+real-time code. MicroPython only configures it and feeds data.
+
+```
+  source                     scheme (ISR dispatch)          channel
+  ───────                    ────────────────────          ────────
+  USB UAC1 audio  ─┐                                         carrier ± deviation
+    stereo→mono,   │                                         harmonic (x1/3/5)
+    volume/mute,   │
+    15 kHz LP +    ├─►  switch (s_scheme):
+    pre-emphasis,  │      FM    : f = carrier + sample·dev/32768
+    limiter        │      TONE  : DDS sine(s) -> f
+  ─────────────────┘      FSK   : symbol -> carrier ± shift
+  internal DDS tone       OOK   : symbol -> RF enable on/off
+  symbol FIFO (FSK/OOK/   CW    : key   -> RF enable on/off
+    PSK), 256 entries     CHIRP : f = f0 + (f1-f0)·t/dur
+  manual key line         PSK   : phase accumulator -> f
+                          ─────────────┬───────────────
+                                       │
+  ring buffer (FM only) ──────────────┤
+                                       ▼
+  PWM slice 7 wrap IRQ @ exactly 48 kHz (48 MHz/1000, top NVIC priority)
+    -> pico_fractional_pll_set_freq_u32(freq)  and/or  enable_output(key)
+    -> Core1 1 MHz PDM dithers PLL_SYS fbdiv_int
+    -> CLK_GPOUT0 -> GPIO21 RF square wave
+```
+
+FM audio path detail:
+
 ```
 PC (48 kHz stereo 16-bit PCM)
   → USB UAC1 audio RX callback (TinyUSB / tud_task soft IRQ)
   → stereo→mono mix + volume + mute
   → 15 kHz band-limit + 75 µs pre-emphasis + limiter (fixed-point, no FPU)
   → SPSC ring buffer (4096 samples)
-  → PWM slice 7 wrap IRQ @ exactly 48 kHz (48 MHz / 1000, top NVIC priority)
+  → PWM slice 7 wrap IRQ @ 48 kHz
   → pico_fractional_pll_set_freq_u32(carrier + sample·dev/32768)
-  → Core1 1 MHz PDM dithers PLL_SYS fbdiv_int
-  → CLK_GPOUT0 → GPIO21, ~87.9 MHz out
+  → CLK_GPOUT0 → GPIO21
 ```
 
-- The hard-real-time audio path never passes through Python; MicroPython only
+- The hard-real-time path never passes through Python; MicroPython only
   configures and controls it.
 - clk_sys is fixed at **48 MHz** (a hard requirement of pico-fractional-pll:
   clk_sys from PLL_USB, PLL_SYS dedicated to the RF output).
+- Only **fm** consumes the USB ring buffer; the other schemes synthesise their
+  waveform in the ISR and never touch the ring.
+
+## Transmit schemes
+
+| scheme | ISR action | source | notes |
+|---|---|---|---|
+| `fm` | freq = carrier + sample·dev/32768 | USB ring | original behaviour; silence gate / pre-emphasis / squelch apply here only |
+| `tone` | DDS sine(s) → freq | internal (up to 2 tones) | 256-entry Q14 LUT, linear interpolation; test tone / CTCSS / DTMF |
+| `fsk` | freq = carrier ± shift | symbol FIFO | shift from `fsk_config`, `0`→-shift `1`→+shift |
+| `ook` | RF enable = bit | symbol FIFO | `0`→RF off |
+| `cw` | RF enable = key | `key(bool)` | Morse timing driven from Python (20 wpm) |
+| `chirp` | freq = linear ramp | internal | `f0..f1` over `duration_ms`, optional gap + repeat |
+| `psk` | freq = Δphase/tsym | symbol FIFO | order 2 (BPSK) / 4 (QPSK); phase lands on the constellation point |
+
+A shared symbol FIFO (256 entries) feeds FSK/OOK/PSK; the symbol clock is a
+counter in the ISR (`sps = 48000/baud`).  Because the PLL only accepts
+frequency, the reachable modulation space is constant-envelope
+frequency/phase modulation plus on/off keying with a coarse (±2/4/8/12 mA)
+drive-strength amplitude - there is no linear AM/SSB path.
 
 ## Key engineering points
 
@@ -49,7 +98,7 @@ PC (48 kHz stereo 16-bit PCM)
 - MicroPython's linker gives SCRATCH_X 0 bytes, so the library's
   `multicore_launch_core1` (which needs `.stack1`) panics — we use
   `multicore_launch_core1_with_stack` with our own 2 KB stack in plain RAM;
-- Do not use `_thread` together with `pico_fm` (both need Core1).
+- Do not use `_thread` together with `pico_tx` (both need Core1).
 
 ## Narrowband FM reception (handheld radios)
 
@@ -127,7 +176,7 @@ failed `init` never launches core1, so the retry is safe - unlike the
 "deinit/init while running deadlocks" case) and the 1 is persisted so the
 probe does not repeat on every boot.
 
-`status` now shows the actual step (the width of the window `pico_fm.range()`
+`status` now shows the actual step (the width of the window `pico_tx.range()`
 returns is exactly one feedback-divider step).  In addition,
 `tools/pll_range.py minstep` verifies that the solution the C
 `calculate_pll_divider()` returns **already has the smallest step within its
@@ -147,11 +196,11 @@ search itself needs no change.
 
 `build.sh` clones a clean MicroPython (tries the maintainer's fork
 `git.sr.ht/~bytewolf/micropython` first, then upstream) → applies
-`patches/micropython-fm.patch` (skips if already applied) → `make submodules`
-→ `make BOARD=RPI_PICO_FM`. The patch contains:
-- `ports/rp2/boards/RPI_PICO_FM/` (new board: 48 MHz clock, USB_AUDIO, FM macros,
+`patches/micropython-tx.patch` (skips if already applied) → `make submodules`
+→ `make BOARD=RPI_PICO_TX`. The patch contains:
+- `ports/rp2/boards/RPI_PICO_TX/` (new board: 48 MHz clock, USB_AUDIO, FM macros,
   unique VID/PID 0x1209:0xFA50, USB strings);
-- `ports/rp2/fm_transmitter/` (pico_fm user C module: **the bundled
+- `ports/rp2/tx/` (pico_tx user C module: **the bundled
   pico-fractional-pll source** (BSD-3-Clause, Kazuhisa Terasaki) + modulator +
   MicroPython module);
 - `ports/rp2/main.c` (48 MHz boot), `modmachine.c` (disable machine.freq setter);
@@ -195,6 +244,6 @@ Optional, only for uploading/flashing (not needed by `build.sh` itself):
 ```bash
 cd micropython
 git add -A
-git diff --cached > ../release/patches/micropython-fm.patch
+git diff --cached > ../release/patches/micropython-tx.patch
 git reset -q
 ```

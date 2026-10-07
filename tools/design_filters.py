@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Design and quantise the fixed-point audio filters used by fm_modulator.c.
+"""Design and quantise the fixed-point audio filters used by tx_modulator.c.
 
 Designs a Chebyshev type I low-pass (0.2 dB ripple) as a cascade of
 second-order sections, applies the bilinear transform at fs = 48 kHz with

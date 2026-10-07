@@ -52,7 +52,7 @@ console) `tools/upload.sh` / `tools/serial.sh` do not take "the first port";
 they resolve it by USB ID:
 
 1. `1209:fa50` — **this firmware's own ID**, set in
-   `ports/rp2/boards/RPI_PICO_FM/mpconfigboard.h` (`MICROPY_HW_USB_VID/PID`).
+   `ports/rp2/boards/RPI_PICO_TX/mpconfigboard.h` (`MICROPY_HW_USB_VID/PID`).
    It is independent of the board model: a Pico, Pico W, RP2040-Zero or a
    clone running this firmware all enumerate with it.
 2. generic MicroPython RP2040 (`2e8a:0005`, or a description containing

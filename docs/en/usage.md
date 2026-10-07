@@ -6,15 +6,15 @@
 
 1. Hold **BOOTSEL** while plugging the Pico into USB — an `RPI-RP2` drive
    appears.
-2. Drag `firmware/rp2040pico_fm_firmware.uf2` onto it (auto-flash & reboot),
+2. Drag `firmware/picotx_firmware.uf2` onto it (auto-flash & reboot),
    or run `tools/flash.sh` (needs picotool).
 3. Optional check (from the repo root): `sha256sum -c firmware/sha256.txt`.
 
 ## Connecting
 
 - The device enumerates as a **serial port** (MicroPython REPL / `fm>` console)
-  plus a **USB audio device** ("RP2040 RF Transmitter"; shown as
-  RP2040 RF Transmitter / BurgerW).
+  plus a **USB audio device** ("pico-tx"; shown as
+  pico-tx / BurgerW).
 - Recommended: `tools/serial.sh` (tio) — it auto-reconnects when the board
   reboots (band switches / presets do reboot), and a udev rule can pin the
   device name to `/dev/pico` so the ttyACM number never drifts.
@@ -27,7 +27,7 @@
 
 ## Playing
 
-1. In the OS sound settings, select **RP2040 RF Transmitter** as the output.
+1. In the OS sound settings, select **pico-tx** as the output.
 2. Play something.
 3. Put an FM radio next to the Pico, tuned to **87.9 MHz**.
 
