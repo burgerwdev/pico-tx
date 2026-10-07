@@ -217,7 +217,7 @@ HELP_CATEGORIES = [
     ]),
     ("modes", "transmit modes and symbol senders", [
         ("mode <fm|tone|fsk|ook|cw|chirp|psk>", "select the transmit scheme"),
-        ("tx on|off", "start/stop the modulation engine"),
+        ("tx on|off", "pause/resume the engine (keeps the pattern)"),
         ("tone <hz> [hz2] [lvl%]", "internal DDS tone(s) -> FM | tone off"),
         ("fsk <baud> <shift> <hex> [repeat [n]]", "2-FSK symbols"),
         ("ook <baud> <hex> [repeat [n]]", "on/off keying symbols"),
@@ -1254,16 +1254,20 @@ def do_command(line, autolog=True):
                 print("usage: mode <fm|tone|fsk|ook|cw|chirp|psk>")
         elif cmd == "tx":
             if arg not in ("on", "off"):
-                print("usage: tx on|off  (start/stop the modulation engine)")
+                print("usage: tx on|off  (pause/resume; the queued pattern is kept)")
             else:
                 if arg == "on":
                     pico_tx.start()
+                    extra = " - resumed, %d symbols left" % pico_tx.pending() if pico_tx.pending() else ""
+                    print("tx on%s" % extra)
                 else:
+                    # Pause: keep the queued pattern and payload so 'tx on'
+                    # resumes. A new send or 'mode' replaces the pattern.
                     pico_tx.stop()
-                    pico_tx.clear_symbols()   # break any running repeat
-                    LAST_TX = ""
-                    LAST_CHIRP = (0, 0, 0)
-                print("tx %s" % arg)
+                    extra = " - paused, %d symbols left" % pico_tx.pending() if pico_tx.pending() else ""
+                    print("tx off%s" % extra)
+                if autolog:
+                    show_log()
         elif cmd == "tone":
             if arg is None or arg == "off":
                 pico_tx.tone_stop()

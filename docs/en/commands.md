@@ -46,7 +46,7 @@ data. Switching to a non-`fm` mode starts the modulation engine automatically.
 | Command | Description | Example |
 |---|---|---|
 | `mode [name]` | Show or select the transmit scheme: `fm`,`tone`,`fsk`,`ook`,`cw`,`chirp`,`psk` | `mode tone` |
-| `tx on\|off` | Start/stop the modulation engine (also breaks a running repeat) | `tx off` |
+| `tx on\|off` | Pause/resume the modulation engine (the queued pattern is kept; `tx on` resumes it) | `tx off` |
 | `tone <hz> [hz2] [level%]` | Internal DDS tone(s) FM-modulated onto the carrier; `tone off` stops | `tone 1000` |
 | `fsk <baud> <shift_hz> <hex> [repeat [n]]` | Queue 2-FSK symbols (`0`→-shift, `1`→+shift) | `fsk 1200 4500 55aa0f repeat 0` |
 | `ook <baud> <hex> [repeat [n]]` | Queue on/off keying symbols (`0`→RF off) | `ook 2000 aaaa repeat 0` |
@@ -61,7 +61,8 @@ Ctrl-C to get the prompt back (the transmission keeps running in firmware).
 
 `repeat [n]`: no `repeat` = send once; `repeat` or `repeat 0` = repeat
 forever; `repeat n` = n passes total.  The repeat runs in firmware, so the
-console stays responsive - any new send/`mode`/`tx off` breaks it immediately.
+console stays responsive - `tx off` pauses it (and `tx on` resumes).  A new
+send or `mode` replaces the pattern.
 
 Notes:
 - `fsk`/`ook`/`psk`/`cw` share a 1024-symbol firmware FIFO; symbols beyond

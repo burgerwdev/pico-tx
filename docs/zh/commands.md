@@ -45,7 +45,7 @@
 | 命令 | 说明 | 示例 |
 |---|---|---|
 | `mode [名称]` | 查看/选择发射方式：`fm` `tone` `fsk` `ook` `cw` `chirp` `psk` | `mode tone` |
-| `tx on\|off` | 启动/停止调制引擎（也会打断正在运行的 repeat） | `tx off` |
+| `tx on\|off` | 暂停/继续调制引擎（保留已排队的图案，`tx on` 继续发） | `tx off` |
 | `tone <hz> [hz2] [level%]` | 内部 DDS 音调 FM 调制到载波；`tone off` 停止 | `tone 1000` |
 | `fsk <baud> <shift_hz> <hex> [repeat [n]]` | 排队 2-FSK 符号（`0`→-shift，`1`→+shift） | `fsk 1200 4500 55aa0f repeat 0` |
 | `ook <baud> <hex> [repeat [n]]` | 排队开关键控符号（`0`→RF 关） | `ook 2000 aaaa repeat 0` |
@@ -58,7 +58,7 @@
 发送命令会自动启动调制引擎，然后打开 `log`；按 Ctrl-C 回到提示符（发射仍在固件里继续）。
 
 `repeat [n]`：不加 = 发一次；`repeat` 或 `repeat 0` = 无限循环；`repeat n` = 共发 n 遍。
-循环在固件里跑，控制台不阻塞——任何新发送 / `mode` / `tx off` 都能**立即打断**。
+循环在固件里跑，控制台不阻塞——`tx off` 暂停（`tx on` 继续）；新的发送命令或 `mode` 会替换图案。
 
 说明：
 - `fsk`/`ook`/`psk`/`cw` 共用固件内 1024 符号 FIFO，超出部分会被拒绝（`send` 返回实际接受的数量）。`baud` 要配合 PLL 环路带宽（宽带 FM 下几 kbaud 量级）。
