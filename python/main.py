@@ -24,7 +24,7 @@ VERSION = "0.1.0"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
 # (release/firmware/picotx_firmware.uf2).  Shown by `ver`.
-FW_SHA256 = "ee5c02ca67d3bf92988c75685b9e4f941dbc379d41acc8edece618a8fa81f224"
+FW_SHA256 = "3ec839705e1f758ad936dd52fa8856c5b36a710838c8e2641f2930445812edf1"
 
 # Project links shown by the `ver` command.
 PROJECT_URL = "https://git.sr.ht/~bytewolf/rp2040-fm-transmitter"
@@ -749,25 +749,28 @@ def show_status():
     cf = pico_tx.current_freq()
     print("----- pico-tx status -----")
     print("PLL ready      : %s" % ("yes" if pico_tx.ready() else "NO"))
+    # One unambiguous answer: is RF being emitted right now?
+    keyed = pico_tx.mode() in ("fsk", "ook", "cw", "psk")
+    if not pico_tx.output_on():
+        tx_txt = "no - RF off (use 'rf on')"
+    elif not pico_tx.running():
+        tx_txt = "no - engine stopped (use 'tx on')"
+    elif pico_tx.rf_gated():
+        tx_txt = "no - keyed off now" + (" (no data queued)" if keyed and pico_tx.pending() == 0 else "")
+    else:
+        tx_txt = "YES"
+    print("Transmitting   : %s" % tx_txt)
+    print("RF armed       : %s (GPIO%d)" % ("yes" if pico_tx.output_on() else "no", RF_PIN))
     print("TX engine      : %s" % ("running" if pico_tx.running() else "stopped"))
     print("Mode           : %s" % pico_tx.mode())
     if pico_tx.mode() == "tone":
         print("Tone           : %s" % ("%d Hz" % pico_tx.tone_hz() if pico_tx.tone_on() else "off"))
-    elif pico_tx.mode() in ("fsk", "ook", "cw", "psk"):
+    elif keyed:
         rep = pico_tx.repeat()
         print("Symbols        : %d queued (repeat %s)"
               % (pico_tx.pending(), "forever" if rep == 0 else ("x%d" % rep)))
     if LAST_TX:
         print("Last TX        : %s" % LAST_TX)
-    if not pico_tx.output_on():
-        rf_txt = "OFF (rf off)"
-    elif not pico_tx.running():
-        rf_txt = "OFF (engine stopped)"
-    elif pico_tx.rf_gated():
-        rf_txt = "ON - keyed off now"
-    else:
-        rf_txt = "ON"
-    print("RF output      : %s (GPIO%d)" % (rf_txt, RF_PIN))
     if HARMONIC > 1:
         print("Carrier        : %.3f MHz effective (fundamental %.3f MHz x%d)"
               % (TARGET_FREQ / 1e6, pico_tx.carrier() / 1e6, HARMONIC))

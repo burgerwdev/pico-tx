@@ -1635,10 +1635,10 @@ index 0000000..a58875f
 +#endif // _PICO_FRACTIONAL_PLL_H
 diff --git a/ports/rp2/tx/tx_modulator.c b/ports/rp2/tx/tx_modulator.c
 new file mode 100644
-index 0000000..dc271cf
+index 0000000..37984b5
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.c
-@@ -0,0 +1,1421 @@
+@@ -0,0 +1,1423 @@
 +/*
 + * tx_modulator.c
 + *
@@ -2087,11 +2087,13 @@ index 0000000..dc271cf
 +        if (keyed != s_rf_key_applied) {
 +            if (keyed) {
 +                pico_fractional_pll_set_freq_u32(s_carrier_hz);
-+                s_last_freq = s_carrier_hz;
 +            }
 +            pico_fractional_pll_enable_output(keyed);
 +            s_rf_key_applied = keyed;
 +        }
++        // Keep s_last_freq current even while keyed off, so the diagnostics
++        // show the carrier instead of a misleading "ISR never ran".
++        s_last_freq = s_carrier_hz;
 +        s_rf_gated = !keyed;
 +    } else {
 +        s_last_freq = freq;
