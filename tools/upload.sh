@@ -60,6 +60,13 @@ import serial
 port = sys.argv[1]
 try:
     s = serial.Serial(port, 115200, timeout=0.2)
+except PermissionError as e:
+    sys.exit(
+        "error: cannot open %s: %s\n"
+        "       the port is root-owned; install the udev rule (once):\n"
+        "         sudo install -m644 tools/99-pico-tx.rules /etc/udev/rules.d/99-pico-tx.rules\n"
+        "         sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=tty\n"
+        "       then replug the Pico. (quick fix: sudo chmod 666 %s)" % (port, e, port))
 except Exception as e:
     sys.exit("error: cannot open %s: %s" % (port, e))
 
