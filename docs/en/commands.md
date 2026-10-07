@@ -54,7 +54,10 @@ data. Switching to a non-`fm` mode starts the modulation engine automatically.
 | `cw <text> [repeat [n]]` | Send `text` as Morse on the carrier (20 wpm) | `cw CQ CQ DE PICO TX repeat 0` |
 | `chirp <f0> <f1> <ms> [gap] [repeat]` | Linear frequency sweep; `chirp off` stops | `chirp 87900000 88100000 100 20 1` |
 | `service [cmd...]` | Console command to run automatically at boot (headless); `service off` clears | `service tone 1000` |
-| `console on\|off` | Interactive console on/off; `off` keeps the boot service running (Ctrl-C returns to the REPL) | `console off` |
+| `log` | Live transmit log (one line/s; Ctrl-C stops, `log` resumes). Auto-started after `cw`/`fsk`/`ook`/`psk`/`tone`/`chirp` | `log` |
+
+Sending auto-starts the modulation engine and then opens the `log`; press
+Ctrl-C to get the prompt back (the transmission keeps running in firmware).
 
 `repeat [n]`: no `repeat` = send once; `repeat` or `repeat 0` = repeat
 forever; `repeat n` = n passes total.  The repeat runs in firmware, so the
@@ -69,7 +72,8 @@ Notes:
 - `cw` is Morse keyed as OOK; the radio hears it only if tuned to the carrier
   (use a narrow FM/AM receiver or an SDR in CW/AM mode).
 - `service` runs one command after boot, e.g. `service cw CQ DE PICO repeat 0`
-  or `service tone 1000`. Combine with `console off` for a headless beacon.
+  or `service tone 1000`.  The boot service never opens the live `log`, so it
+  is safe for a headless beacon.
 
 ## Notes
 

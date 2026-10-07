@@ -53,7 +53,9 @@
 | `cw <文本> [repeat [n]]` | 在载波上发摩斯（20 wpm） | `cw CQ CQ DE PICO TX repeat 0` |
 | `chirp <f0> <f1> <ms> [gap] [repeat]` | 线性扫频；`chirp off` 停止 | `chirp 87900000 88100000 100 20 1` |
 | `service [命令...]` | 开机自动执行的一条控制台命令（无头运行）；`service off` 清除 | `service tone 1000` |
-| `console on\|off` | 交互控制台开关；`off` 仅跑开机服务（Ctrl-C 回 REPL） | `console off` |
+| `log` | 实时发射日志（每秒一行；Ctrl-C 停，`log` 恢复）。`cw`/`fsk`/`ook`/`psk`/`tone`/`chirp` 发完后自动打开 | `log` |
+
+发送命令会自动启动调制引擎，然后打开 `log`；按 Ctrl-C 回到提示符（发射仍在固件里继续）。
 
 `repeat [n]`：不加 = 发一次；`repeat` 或 `repeat 0` = 无限循环；`repeat n` = 共发 n 遍。
 循环在固件里跑，控制台不阻塞——任何新发送 / `mode` / `tx off` 都能**立即打断**。
@@ -63,7 +65,7 @@
 - `shift_hz` 必须落在 `init(carrier ± deviation)` 设定的 PLL 窗口内。
 - `chirp` 频率为绝对 Hz，同样必须在窗口内。
 - `cw` 是把摩斯编码成 OOK（点/划 = 固定时长通断）；接收机调到该载波并用 CW/AM 模式才能听到。
-- `service` 开机后执行一条命令，例如 `service cw CQ DE PICO repeat 0` 或 `service tone 1000`；搭配 `console off` 即为无头信标。
+- `service` 开机后执行一条命令，例如 `service cw CQ DE PICO repeat 0` 或 `service tone 1000`；开机服务不会打开实时 `log`，适合无头信标。
 
 ## 说明
 

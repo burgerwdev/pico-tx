@@ -229,6 +229,7 @@ HELP_CATEGORIES = [
     ]),
     ("debug", "status, meters and diagnostics", [
         ("status / s", "show all transmitter parameters"),
+        ("log", "live transmit log (Ctrl-C stops; 'log' resumes)"),
         ("vbar", "live audio level meter"),
         ("ring", "ring buffer fill %"),
         ("diag [s]", "ISR/RX rates + clock drift (default 1s, max 60)"),
@@ -241,7 +242,6 @@ HELP_CATEGORIES = [
         ("led <0|1|2|3>", "LED mode: 0 off, 1 always, 2 stream, 3 VU"),
         ("ledpin <0-29> | ws2812 [gpio]", "status LED pin (save + reboot)"),
         ("service [cmd...]", "command to run at boot (headless) | service off"),
-        ("console on|off", "interactive console on/off"),
         ("reboot", "save current settings and reboot"),
         ("reset", "delete saved config and reboot to defaults"),
         ("cls", "clear the terminal screen"),
@@ -804,6 +804,33 @@ def show_status():
     print("---------------------------------")
 
 
+def show_log():
+    """Live transmit log: one status line per second until Ctrl-C.  Run
+    `log` again to resume.  Auto-started after cw/fsk/ook/psk/tone/chirp."""
+    prev = pico_tx.diag()[0]
+    prev_t = time.ticks_ms()
+    print("tx log - Ctrl-C to stop")
+    try:
+        while True:
+            time.sleep_ms(1000)
+            now = pico_tx.diag()[0]
+            t = time.ticks_ms()
+            dt = time.ticks_diff(t, prev_t) or 1
+            rate = (now - prev) * 1000 // dt
+            prev, prev_t = now, t
+            rep = pico_tx.repeat()
+            print("mode=%-5s engine=%-7s rf=%-3s sym=%-4d repeat=%-7s"
+                  " isr=%5d/s ring=%3d%% clips=%d"
+                  % (pico_tx.mode(),
+                     "running" if pico_tx.running() else "stopped",
+                     "off" if pico_tx.rf_gated() else "on",
+                     pico_tx.pending(),
+                     "forever" if rep == 0 else ("x%d" % rep),
+                     rate, pico_tx.ring_level(), pico_tx.clips()))
+    except KeyboardInterrupt:
+        print("(log stopped; type 'log' to resume)")
+
+
 def make_poller():
     """A select.poll() on stdin, or None if not supported."""
     try:
@@ -901,9 +928,9 @@ def vbar():
     print()
 
 
-def do_command(line):
+def do_command(line, autolog=True):
     global RF_ON, AUDIO_ON, PREEMPH, SQUELCH_PCT, HARMONIC, TARGET_FREQ, DEV_EFF, SILENCE_MODE, TRIM_HZ
-    global MODE, SERVICE, CONSOLE_ON
+    global MODE, SERVICE
     parts = line.split()
     if not parts:
         return True
@@ -1184,6 +1211,8 @@ def do_command(line):
                     pico_tx.start()
                     print("tone %d Hz%s at %d%% (FM deviation)"
                           % (hz, (" + %d Hz" % hz2) if hz2 else "", lvl))
+                    if autolog:
+                        show_log()
                 else:
                     print("usage: tone <hz> [hz2] [level%% 0-100]  |  tone off")
         elif cmd in ("fsk", "ook", "psk"):
@@ -1226,6 +1255,8 @@ def do_command(line):
                           % (cmd.upper(), baud, n, len(data),
                              " - repeat forever" if rep == 0
                              else (" - x%d" % rep if rep > 1 else "")))
+                    if autolog:
+                        show_log()
         elif cmd == "cw":
             rep, toks = parse_repeat(parts[1:])
             text = " ".join(toks)
@@ -1244,6 +1275,8 @@ def do_command(line):
                       % (baud, n, len(data),
                          " - repeat forever" if rep == 0
                          else (" - x%d" % rep if rep > 1 else "")))
+                if autolog:
+                    show_log()
         elif cmd == "chirp":
             if arg is None or arg == "off":
                 pico_tx.chirp_stop()
@@ -1260,6 +1293,8 @@ def do_command(line):
                     pico_tx.start()
                     print("chirp %d -> %d Hz over %d ms%s"
                           % (f0, f1, ms, " (repeating)" if rep else ""))
+                    if autolog:
+                        show_log()
                 else:
                     print("usage: chirp <f0> <f1> <ms> [gap_ms] [repeat]  |  chirp off")
         elif cmd == "service":
@@ -1275,13 +1310,8 @@ def do_command(line):
                 SERVICE = cmdline[1]
                 save_current()
                 print("boot service set: %s" % SERVICE)
-        elif cmd == "console":
-            if arg not in ("on", "off"):
-                print("usage: console on|off  (off = headless; Ctrl-C returns to the REPL)")
-            else:
-                CONSOLE_ON = arg == "on"
-                save_current()
-                print("console %s" % arg)
+        elif cmd == "log":
+            show_log()
         elif cmd == "vol":
             if arg is None:
                 print("usage: vol <0-100>, e.g. vol 70")
@@ -1608,7 +1638,7 @@ def do_setup():
     if SERVICE:
         print("boot service: %s" % SERVICE)
         try:
-            do_command(SERVICE)
+            do_command(SERVICE, autolog=False)
         except Exception as e:
             print("(service error: %s)" % e)
     if not CONSOLE_ON:
