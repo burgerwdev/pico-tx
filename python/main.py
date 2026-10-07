@@ -95,6 +95,8 @@ SERVICE = ""
 # Interactive console on/off.  When off the device stays in a service loop
 # (still recoverable: Ctrl-C drops to the MicroPython REPL).
 CONSOLE_ON = True
+# Last chirp parameters (f0, f1, ms) shown by the `log` view.
+LAST_CHIRP = (0, 0, 0)
 
 # ITU Morse timing (dots/dashes/dah) - sent by the `cw` command.
 MORSE = {
@@ -804,29 +806,78 @@ def show_status():
     print("---------------------------------")
 
 
+def _vu_bar(width=10, n=128):
+    """Peak level bar from the most recent samples (FM audio path)."""
+    pk = 0
+    for v in array.array("h", pico_tx.samples(n)):
+        a = v if v >= 0 else -v
+        if a > pk:
+            pk = a
+    filled = pk * width // 32768
+    return "[" + "#" * filled + "." * (width - filled) + "]"
+
+
 def show_log():
     """Live transmit log: one status line per second until Ctrl-C.  Run
-    `log` again to resume.  Auto-started after cw/fsk/ook/psk/tone/chirp."""
-    prev = pico_tx.diag()[0]
-    prev_t = time.ticks_ms()
+    `log` again to resume.  Auto-started after cw/fsk/ook/psk/tone/chirp.
+
+    Fields are mode-aware: FM shows audio/drift/VU, keyed modes show the
+    symbol queue and repeat, chirp shows its sweep.  t = seconds in the log."""
+    t0 = time.ticks_ms()
+    prev_isr = pico_tx.diag()[0]
+    prev_t = t0
+    u0, d0 = ring_stats()
     print("tx log - Ctrl-C to stop")
+    print("    t     mode   carrier         RF   detail")
     try:
         while True:
             time.sleep_ms(1000)
             now = pico_tx.diag()[0]
             t = time.ticks_ms()
             dt = time.ticks_diff(t, prev_t) or 1
-            rate = (now - prev) * 1000 // dt
-            prev, prev_t = now, t
-            rep = pico_tx.repeat()
-            print("mode=%-5s engine=%-7s rf=%-3s sym=%-4d repeat=%-7s"
-                  " isr=%5d/s ring=%3d%% clips=%d"
-                  % (pico_tx.mode(),
-                     "running" if pico_tx.running() else "stopped",
-                     "off" if pico_tx.rf_gated() else "on",
-                     pico_tx.pending(),
-                     "forever" if rep == 0 else ("x%d" % rep),
-                     rate, pico_tx.ring_level(), pico_tx.clips()))
+            isr = (now - prev_isr) * 1000 // dt
+            prev_isr, prev_t = now, t
+            el = time.ticks_diff(t, t0) / 1000.0
+            mode = pico_tx.mode()
+            run = pico_tx.running()
+            if HARMONIC > 1:
+                car = "%.3fM x%d" % (TARGET_FREQ / 1e6, HARMONIC)
+            else:
+                car = "%.4f MHz" % (pico_tx.carrier() / 1e6)
+            if not run:
+                rf = "off"
+            elif mode in ("ook", "cw"):
+                rf = "key"       # keyed on/off, not a continuous carrier
+            elif pico_tx.rf_gated():
+                rf = "gate"      # FM silence gate holding the RF off
+            else:
+                rf = "on"
+            if not run:
+                detail = "engine stopped"
+            elif mode == "fm":
+                u, d = ring_stats()
+                du = (u - u0) if (u is not None and u0 is not None) else 0
+                dd = (d - d0) if (d is not None and d0 is not None) else 0
+                u0, d0 = u, d
+                detail = "dev=%.1fk host=%s ring=%3d%% drift=+%d/-%d clips=%d %s" % (
+                    pico_tx.deviation() / 1e3,
+                    "yes" if pico_tx.audio_active() else "no",
+                    pico_tx.ring_level(), du, dd, pico_tx.clips(), _vu_bar())
+            elif mode == "tone":
+                detail = "tone=%-6s isr=%d/s" % (
+                    ("%dHz" % pico_tx.tone_hz()) if pico_tx.tone_on() else "off", isr)
+            elif mode in ("fsk", "ook", "psk", "cw"):
+                rep = pico_tx.repeat()
+                detail = "sym=%4d repeat=%-7s isr=%d/s" % (
+                    pico_tx.pending(),
+                    "forever" if rep == 0 else ("x%d" % rep), isr)
+            elif mode == "chirp":
+                f0, f1, ms = LAST_CHIRP
+                detail = "%.3f->%.3f MHz %dms isr=%d/s" % (
+                    f0 / 1e6, f1 / 1e6, ms, isr)
+            else:
+                detail = "isr=%d/s" % isr
+            print("%6.1fs %-6s %-15s %-4s %s" % (el, mode, car, rf, detail))
     except KeyboardInterrupt:
         print("(log stopped; type 'log' to resume)")
 
@@ -930,7 +981,7 @@ def vbar():
 
 def do_command(line, autolog=True):
     global RF_ON, AUDIO_ON, PREEMPH, SQUELCH_PCT, HARMONIC, TARGET_FREQ, DEV_EFF, SILENCE_MODE, TRIM_HZ
-    global MODE, SERVICE
+    global MODE, SERVICE, LAST_CHIRP
     parts = line.split()
     if not parts:
         return True
@@ -1289,6 +1340,7 @@ def do_command(line, autolog=True):
                 rep = len(parts) > 5 and parts[5].lower() in ("1", "on", "yes", "repeat")
                 if None not in (f0, f1, ms) and ms > 0:
                     MODE = "chirp"
+                    LAST_CHIRP = (f0, f1, ms)
                     pico_tx.chirp(f0, f1, ms, gap, rep)
                     pico_tx.start()
                     print("chirp %d -> %d Hz over %d ms%s"
