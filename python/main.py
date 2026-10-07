@@ -97,6 +97,8 @@ SERVICE = ""
 CONSOLE_ON = True
 # Last chirp parameters (f0, f1, ms) shown by the `log` view.
 LAST_CHIRP = (0, 0, 0)
+# Short description of the last transmission (payload) for `log`/`status`.
+LAST_TX = ""
 
 # ITU Morse timing (dots/dashes/dah) - sent by the `cw` command.
 MORSE = {
@@ -541,6 +543,12 @@ def morse_ook(text, wpm=20):
     return baud, bytes(syms)
 
 
+def hex_str(data, limit=48):
+    """Hex preview of a byte payload, truncated with '..'."""
+    h = "".join("%02x" % b for b in data)
+    return h if len(h) <= limit else h[:limit] + ".."
+
+
 def parse_repeat(parts):
     """Pop a trailing 'repeat [n]' from a token list.  Returns (n, toks):
     n = 1 (no repeat), 0 (forever), or the given count; toks has the tokens
@@ -750,6 +758,8 @@ def show_status():
         rep = pico_tx.repeat()
         print("Symbols        : %d queued (repeat %s)"
               % (pico_tx.pending(), "forever" if rep == 0 else ("x%d" % rep)))
+    if LAST_TX:
+        print("Last TX        : %s" % LAST_TX)
     if not RF_ON:
         rf_txt = "OFF (rf off)"
     elif not pico_tx.running():
@@ -828,6 +838,8 @@ def show_log():
     prev_t = t0
     u0, d0 = ring_stats()
     print("tx log - Ctrl-C to stop")
+    if LAST_TX:
+        print("payload: %s" % LAST_TX)
     print("    t     mode   carrier         RF   detail")
     try:
         while True:
@@ -981,7 +993,7 @@ def vbar():
 
 def do_command(line, autolog=True):
     global RF_ON, AUDIO_ON, PREEMPH, SQUELCH_PCT, HARMONIC, TARGET_FREQ, DEV_EFF, SILENCE_MODE, TRIM_HZ
-    global MODE, SERVICE, LAST_CHIRP
+    global MODE, SERVICE, LAST_CHIRP, LAST_TX
     parts = line.split()
     if not parts:
         return True
@@ -1258,6 +1270,8 @@ def do_command(line, autolog=True):
                 if None not in (hz, hz2, lvl) and 0 <= hz <= 20000 \
                         and 0 <= hz2 <= 20000 and 0 <= lvl <= 100:
                     MODE = "tone"
+                    LAST_TX = "tone %d Hz%s @ %d%%" % (
+                        hz, (" + %d Hz" % hz2) if hz2 else "", lvl)
                     pico_tx.tone(hz, hz2 or 0, lvl)
                     pico_tx.start()
                     print("tone %d Hz%s at %d%% (FM deviation)"
@@ -1277,27 +1291,32 @@ def do_command(line, autolog=True):
                 print("  e.g. fsk 1200 4500 55aa0f  |  ook 2000 aaaa repeat 0  |  psk 2400 2 abcd repeat 5")
             else:
                 baud = parse_int(toks[0], "baud")
+                desc = cmd
                 if baud is not None and baud > 0:
                     if cmd == "fsk":
                         shift = parse_int(toks[1], "shift Hz")
                         data = parse_hex_bytes(toks[2]) if shift is not None else None
                         if data is not None:
                             MODE = "fsk"
+                            desc = "fsk %d baud +/-%d Hz" % (baud, shift)
                             pico_tx.fsk_config(baud, shift)
                     elif cmd == "psk":
                         order = parse_int(toks[1], "order 2|4")
                         data = parse_hex_bytes(toks[2]) if order in (2, 4) else None
                         if data is not None:
                             MODE = "psk"
+                            desc = "psk %d baud %s" % (baud, "BPSK" if order == 2 else "QPSK")
                             pico_tx.psk_config(baud, order)
                     else:  # ook
                         data = parse_hex_bytes(toks[1])
                         if data is not None:
                             MODE = "ook"
+                            desc = "ook %d baud" % baud
                             pico_tx.ook_config(baud)
                 if data is None:
                     print("usage: %s <baud> ... <hex-symbols> [repeat [n]]" % cmd)
                 else:
+                    LAST_TX = "%s, %d sym: %s" % (desc, len(data), hex_str(data))
                     pico_tx.clear_symbols()
                     pico_tx.set_repeat(rep)
                     pico_tx.start()
@@ -1316,6 +1335,7 @@ def do_command(line, autolog=True):
             else:
                 baud, data = morse_ook(text)
                 MODE = "cw"
+                LAST_TX = "cw 20wpm: %s" % text
                 pico_tx.set_mode("cw")
                 pico_tx.set_symbol_rate(baud)
                 pico_tx.clear_symbols()
@@ -1341,6 +1361,8 @@ def do_command(line, autolog=True):
                 if None not in (f0, f1, ms) and ms > 0:
                     MODE = "chirp"
                     LAST_CHIRP = (f0, f1, ms)
+                    LAST_TX = "chirp %.4f->%.4f MHz %dms%s" % (
+                        f0 / 1e6, f1 / 1e6, ms, " repeat" if rep else "")
                     pico_tx.chirp(f0, f1, ms, gap, rep)
                     pico_tx.start()
                     print("chirp %d -> %d Hz over %d ms%s"
