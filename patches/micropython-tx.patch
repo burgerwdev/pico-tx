@@ -1589,10 +1589,10 @@ index 0000000..a58875f
 +#endif // _PICO_FRACTIONAL_PLL_H
 diff --git a/ports/rp2/tx/tx_modulator.c b/ports/rp2/tx/tx_modulator.c
 new file mode 100644
-index 0000000..c875121
+index 0000000..5820e74
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.c
-@@ -0,0 +1,1334 @@
+@@ -0,0 +1,1348 @@
 +/*
 + * tx_modulator.c
 + *
@@ -1848,6 +1848,7 @@ index 0000000..c875121
 +static volatile int32_t s_sym_freq;       // current FSK/PSK frequency offset
 +static uint32_t s_psk_phase;              // PSK phase accumulator (2^32 = 2pi)
 +static volatile bool s_rf_key;            // CW / OOK key state
++static volatile bool s_rf_key_applied = true; // last key state pushed to the GPOUT
 +static volatile uint32_t s_sym_sent;      // symbols actually consumed
 +
 +// --- linear chirp (TX_MOD_CHIRP) ---
@@ -2017,9 +2018,18 @@ index 0000000..c875121
 +    }
 +
 +    if (key_scheme) {
-+        pico_fractional_pll_set_freq_u32(s_carrier_hz);
-+        pico_fractional_pll_enable_output(keyed);
-+        s_last_freq = s_carrier_hz;
++        // Only touch the clock/GPIO on a key transition.  enable_output()
++        // re-inits the GPOUT clock and the pad, so calling it every 48 kHz
++        // tick restarts the divider each sample - that splatters the keyed
++        // carrier and burns ISR time.  Toggle on change only.
++        if (keyed != s_rf_key_applied) {
++            if (keyed) {
++                pico_fractional_pll_set_freq_u32(s_carrier_hz);
++                s_last_freq = s_carrier_hz;
++            }
++            pico_fractional_pll_enable_output(keyed);
++            s_rf_key_applied = keyed;
++        }
 +        s_rf_gated = !keyed;
 +    } else {
 +        s_last_freq = freq;
@@ -2109,6 +2119,7 @@ index 0000000..c875121
 +    s_sym_freq = 0;
 +    s_psk_phase = 0;
 +    s_rf_key = false;
++    s_rf_key_applied = true;
 +    s_sym_sent = 0;
 +    s_chirp_f0 = 0;
 +    s_chirp_f1 = 0;
@@ -2156,6 +2167,8 @@ index 0000000..c875121
 +        s_sym_freq = 0;
 +        s_sym_countdown = 1;
 +        s_chirp_tick = 0;
++        // Force the next keyed ISR tick to re-apply the output state.
++        s_rf_key_applied = !s_rf_key;
 +    }
 +    s_scheme = scheme;
 +}
@@ -2167,6 +2180,7 @@ index 0000000..c875121
 +void tx_modulator_start(void) {
 +    tx_pwm_start();
 +    pico_fractional_pll_enable_output(true);
++    s_rf_key_applied = true;
 +    s_rf_gated = false;
 +    if (s_scheme == TX_MOD_FM) {
 +        s_audio_route_on = true;
