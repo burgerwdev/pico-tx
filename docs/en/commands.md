@@ -46,26 +46,30 @@ data. Switching to a non-`fm` mode starts the modulation engine automatically.
 | Command | Description | Example |
 |---|---|---|
 | `mode [name]` | Show or select the transmit scheme: `fm`,`tone`,`fsk`,`ook`,`cw`,`chirp`,`psk` | `mode tone` |
-| `tx on\|off` | Start/stop the modulation engine (non-FM schemes) | `tx off` |
+| `tx on\|off` | Start/stop the modulation engine (also breaks a running repeat) | `tx off` |
 | `tone <hz> [hz2] [level%]` | Internal DDS tone(s) FM-modulated onto the carrier; `tone off` stops | `tone 1000` |
-| `fsk <baud> <shift_hz> <hex> [loop]` | Queue 2-FSK symbols (`0`→-shift, `1`→+shift); append `loop` to repeat | `fsk 1200 4500 55aa0f loop` |
-| `ook <baud> <hex> [loop]` | Queue on/off keying symbols (`0`→RF off) | `ook 2000 aaaa loop` |
-| `psk <baud> <2\|4> <hex> [loop]` | Queue BPSK (`2`) / QPSK (`4`) symbols | `psk 2400 2 abcd` |
-| `cw <text>` | Key `text` as Morse on the carrier (20 wpm, blocking) | `cw CQ CQ DE PICO TX` |
+| `fsk <baud> <shift_hz> <hex> [repeat [n]]` | Queue 2-FSK symbols (`0`→-shift, `1`→+shift) | `fsk 1200 4500 55aa0f repeat 0` |
+| `ook <baud> <hex> [repeat [n]]` | Queue on/off keying symbols (`0`→RF off) | `ook 2000 aaaa repeat 0` |
+| `psk <baud> <2\|4> <hex> [repeat [n]]` | Queue BPSK (`2`) / QPSK (`4`) symbols | `psk 2400 2 abcd` |
+| `cw <text> [repeat [n]]` | Send `text` as Morse on the carrier (20 wpm) | `cw CQ CQ DE PICO TX repeat 0` |
 | `chirp <f0> <f1> <ms> [gap] [repeat]` | Linear frequency sweep; `chirp off` stops | `chirp 87900000 88100000 100 20 1` |
 | `service [cmd...]` | Console command to run automatically at boot (headless); `service off` clears | `service tone 1000` |
 | `console on\|off` | Interactive console on/off; `off` keeps the boot service running (Ctrl-C returns to the REPL) | `console off` |
 
+`repeat [n]`: no `repeat` = send once; `repeat` or `repeat 0` = repeat
+forever; `repeat n` = n passes total.  The repeat runs in firmware, so the
+console stays responsive - any new send/`mode`/`tx off` breaks it immediately.
+
 Notes:
-- `fsk`/`ook`/`psk` use a 256-symbol firmware FIFO; symbols beyond that are
-  rejected (`send` returns how many were accepted). Choose `baud` so the
-  symbol rate fits the PLL loop bandwidth (a few kbaud for wideband FM).
+- `fsk`/`ook`/`psk`/`cw` share a 1024-symbol firmware FIFO; symbols beyond
+  that are rejected (`send` returns how many were accepted). Choose `baud` so
+  the symbol rate fits the PLL loop bandwidth (a few kbaud for wideband FM).
 - `shift_hz` must fit inside the PLL window set by `init(carrier ± deviation)`.
 - `chirp` frequencies are absolute Hz and must also lie inside that window.
-- `cw` keys the carrier off/on; the radio hears Morse only if it is tuned to
-  the carrier (use a narrow FM/AM receiver or an SDR).
-- `service` runs one command after boot, e.g. `service mode cw` or
-  `service tone 1000`. Combine with `console off` for a headless transmitter.
+- `cw` is Morse keyed as OOK; the radio hears it only if tuned to the carrier
+  (use a narrow FM/AM receiver or an SDR in CW/AM mode).
+- `service` runs one command after boot, e.g. `service cw CQ DE PICO repeat 0`
+  or `service tone 1000`. Combine with `console off` for a headless beacon.
 
 ## Notes
 

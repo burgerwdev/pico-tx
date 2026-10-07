@@ -199,10 +199,10 @@ index 0000000..1cdd102
 +target_link_libraries(usermod INTERFACE usermod_pico_tx)
 diff --git a/ports/rp2/tx/modpico_tx.c b/ports/rp2/tx/modpico_tx.c
 new file mode 100644
-index 0000000..864b007
+index 0000000..089ba51
 --- /dev/null
 +++ b/ports/rp2/tx/modpico_tx.c
-@@ -0,0 +1,757 @@
+@@ -0,0 +1,775 @@
 +/*
 + * modpico_tx.c
 + *
@@ -832,17 +832,33 @@ index 0000000..864b007
 +}
 +static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_pending_obj, mod_pico_tx_pending);
 +
-+// pico_tx.set_loop(bool) / pico_tx.loop() - repeat the queued symbols forever
-+static mp_obj_t mod_pico_tx_set_loop(mp_obj_t loop_obj) {
-+    tx_modulator_set_loop(mp_obj_is_true(loop_obj));
++// pico_tx.set_repeat(n) / pico_tx.repeat() - set/get the pass count
++// (0 = repeat forever, N = N passes total).
++static mp_obj_t mod_pico_tx_set_repeat(mp_obj_t n_obj) {
++    tx_modulator_set_repeat((uint32_t)mp_obj_get_int(n_obj));
 +    return mp_const_none;
 +}
-+static MP_DEFINE_CONST_FUN_OBJ_1(mod_pico_tx_set_loop_obj, mod_pico_tx_set_loop);
++static MP_DEFINE_CONST_FUN_OBJ_1(mod_pico_tx_set_repeat_obj, mod_pico_tx_set_repeat);
 +
-+static mp_obj_t mod_pico_tx_loop(void) {
-+    return mp_obj_new_bool(tx_modulator_loop());
++static mp_obj_t mod_pico_tx_repeat(void) {
++    return mp_obj_new_int_from_uint(tx_modulator_repeat());
 +}
-+static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_loop_obj, mod_pico_tx_loop);
++static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_repeat_obj, mod_pico_tx_repeat);
++
++// pico_tx.clear_symbols() - drop the queued pattern / break a running loop.
++static mp_obj_t mod_pico_tx_clear_symbols(void) {
++    tx_modulator_clear_symbols();
++    return mp_const_none;
++}
++static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_clear_symbols_obj, mod_pico_tx_clear_symbols);
++
++// pico_tx.set_symbol_rate(baud) - change the symbol rate without changing the
++// scheme (used by CW, which keeps the cw scheme but needs the Morse baud).
++static mp_obj_t mod_pico_tx_set_symbol_rate(mp_obj_t baud_obj) {
++    tx_modulator_set_symbol_rate((uint32_t)mp_obj_get_int(baud_obj));
++    return mp_const_none;
++}
++static MP_DEFINE_CONST_FUN_OBJ_1(mod_pico_tx_set_symbol_rate_obj, mod_pico_tx_set_symbol_rate);
 +
 +// pico_tx.key(bool) - manual CW/OOK key line
 +static mp_obj_t mod_pico_tx_key(mp_obj_t on_obj) {
@@ -945,8 +961,10 @@ index 0000000..864b007
 +    { MP_ROM_QSTR(MP_QSTR_psk_config), MP_ROM_PTR(&mod_pico_tx_psk_config_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_send), MP_ROM_PTR(&mod_pico_tx_send_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_pending), MP_ROM_PTR(&mod_pico_tx_pending_obj) },
-+    { MP_ROM_QSTR(MP_QSTR_set_loop), MP_ROM_PTR(&mod_pico_tx_set_loop_obj) },
-+    { MP_ROM_QSTR(MP_QSTR_loop), MP_ROM_PTR(&mod_pico_tx_loop_obj) },
++    { MP_ROM_QSTR(MP_QSTR_set_repeat), MP_ROM_PTR(&mod_pico_tx_set_repeat_obj) },
++    { MP_ROM_QSTR(MP_QSTR_repeat), MP_ROM_PTR(&mod_pico_tx_repeat_obj) },
++    { MP_ROM_QSTR(MP_QSTR_clear_symbols), MP_ROM_PTR(&mod_pico_tx_clear_symbols_obj) },
++    { MP_ROM_QSTR(MP_QSTR_set_symbol_rate), MP_ROM_PTR(&mod_pico_tx_set_symbol_rate_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_key), MP_ROM_PTR(&mod_pico_tx_key_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_chirp), MP_ROM_PTR(&mod_pico_tx_chirp_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_chirp_stop), MP_ROM_PTR(&mod_pico_tx_chirp_stop_obj) },
@@ -1603,10 +1621,10 @@ index 0000000..a58875f
 +#endif // _PICO_FRACTIONAL_PLL_H
 diff --git a/ports/rp2/tx/tx_modulator.c b/ports/rp2/tx/tx_modulator.c
 new file mode 100644
-index 0000000..aff0a56
+index 0000000..321458d
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.c
-@@ -0,0 +1,1371 @@
+@@ -0,0 +1,1394 @@
 +/*
 + * tx_modulator.c
 + *
@@ -1848,8 +1866,8 @@ index 0000000..aff0a56
 +    return (uint32_t)((((uint64_t)hz) << 32) / 48000u);
 +}
 +
-+// --- symbol FIFO + timing (FSK / OOK / PSK) ---
-+#define TX_SYM_FIFO_SIZE 256
++// --- symbol FIFO + timing (FSK / OOK / CW / PSK) ---
++#define TX_SYM_FIFO_SIZE 1024
 +#define TX_SYM_FIFO_MASK (TX_SYM_FIFO_SIZE - 1)
 +static uint8_t s_sym_fifo[TX_SYM_FIFO_SIZE];
 +static volatile uint16_t s_sym_head;      // producer (Python / control path)
@@ -1863,8 +1881,9 @@ index 0000000..aff0a56
 +static uint32_t s_psk_phase;              // PSK phase accumulator (2^32 = 2pi)
 +static volatile bool s_rf_key;            // CW / OOK key state
 +static volatile bool s_rf_key_applied = true; // last key state pushed to the GPOUT
-+static volatile bool s_sym_loop;          // repeat the symbol FIFO forever
-+static volatile uint16_t s_sym_loop_start; // FIFO index where the loop restarts
++static volatile uint16_t s_sym_loop_start; // FIFO index where the pattern restarts
++static volatile uint32_t s_repeat;        // total passes: 0 = forever, N = N times
++static volatile uint32_t s_passes_done;   // completed passes of the pattern
 +static volatile uint32_t s_sym_sent;      // symbols actually consumed
 +
 +// --- linear chirp (TX_MOD_CHIRP) ---
@@ -1879,21 +1898,31 @@ index 0000000..aff0a56
 +// the PSK phase step is affordable.
 +static void __not_in_flash_func(tx_symbol_load)(void) {
 +    uint16_t tail = s_sym_tail;
-+    // Loop mode: when the FIFO drains, restart at the first queued symbol so
-+    // a fixed pattern (FSK/OOK/PSK) repeats forever in hardware.
-+    if (tail == s_sym_head && s_sym_loop && s_sym_loop_start != s_sym_head) {
-+        tail = s_sym_loop_start;
-+        s_sym_tail = tail;
++    // Repeat handling: when the FIFO drains, restart at the first queued
++    // symbol.  s_repeat == 0 repeats forever; otherwise the pattern is sent
++    // s_repeat times total, after which the FIFO idles (transmits 0).
++    if (tail == s_sym_head && s_sym_loop_start != s_sym_head) {
++        if (s_repeat == 0) {
++            tail = s_sym_loop_start;
++            s_sym_tail = tail;
++        } else if (s_passes_done + 1 < s_repeat) {
++            s_passes_done++;
++            tail = s_sym_loop_start;
++            s_sym_tail = tail;
++        } else {
++            s_passes_done++;
++            s_sym_loop_start = s_sym_head; // done: stop repeating
++        }
 +    }
 +    uint8_t sym = 0;
 +    if (tail != s_sym_head) {
 +        sym = s_sym_fifo[tail];
 +        s_sym_tail = (uint16_t)((tail + 1) & TX_SYM_FIFO_MASK);
 +    }
-+    // An empty FIFO transmits 0 (FSK: -shift; OOK: RF off; PSK: phase 0).
++    // An empty FIFO transmits 0 (FSK: -shift; OOK/CW: RF off; PSK: phase 0).
 +    if (s_scheme == TX_MOD_FSK) {
 +        s_sym_freq = (sym & 1) ? (int32_t)s_fsk_shift : -(int32_t)s_fsk_shift;
-+    } else if (s_scheme == TX_MOD_OOK) {
++    } else if (s_scheme == TX_MOD_OOK || s_scheme == TX_MOD_CW) {
 +        s_rf_key = (sym != 0);
 +    } else if (s_scheme == TX_MOD_PSK) {
 +        uint32_t order = s_psk_order ? s_psk_order : 2;
@@ -1995,6 +2024,7 @@ index 0000000..aff0a56
 +
 +    case TX_MOD_FSK:
 +    case TX_MOD_OOK:
++    case TX_MOD_CW:
 +    case TX_MOD_PSK: {
 +        if (s_sym_countdown == 0) {
 +            tx_symbol_load();
@@ -2002,7 +2032,7 @@ index 0000000..aff0a56
 +            s_sym_sent++;
 +        }
 +        s_sym_countdown--;
-+        if (s_scheme == TX_MOD_OOK) {
++        if (s_scheme == TX_MOD_OOK || s_scheme == TX_MOD_CW) {
 +            key_scheme = true;
 +            keyed = s_rf_key;
 +        } else {
@@ -2026,12 +2056,6 @@ index 0000000..aff0a56
 +                s_chirp_tick = s_chirp_repeat ? 0 : (s_chirp_period - 1);
 +            }
 +        }
-+        break;
-+    }
-+
-+    case TX_MOD_CW: {
-+        key_scheme = true;
-+        keyed = s_rf_key;
 +        break;
 +    }
 +
@@ -2142,8 +2166,9 @@ index 0000000..aff0a56
 +    s_psk_phase = 0;
 +    s_rf_key = false;
 +    s_rf_key_applied = true;
-+    s_sym_loop = false;
 +    s_sym_loop_start = 0;
++    s_repeat = 1;
++    s_passes_done = 0;
 +    s_sym_sent = 0;
 +    s_chirp_f0 = 0;
 +    s_chirp_f1 = 0;
@@ -2314,17 +2339,33 @@ index 0000000..aff0a56
 +    return (uint32_t)((s_sym_head - s_sym_tail) & TX_SYM_FIFO_MASK);
 +}
 +
-+// Loop the currently queued symbols forever (FSK/OOK/PSK).  Enable it after
-+// the pattern has been written; the loop restarts at the first pending symbol.
-+// Calling this stops accepting the loop point again until the queue drains,
-+// so send the whole pattern first.
-+void tx_modulator_set_loop(bool loop) {
++// Set how many times the queued pattern is transmitted: 0 = repeat forever,
++// N (>=1) = N passes total.  The repeat restarts at the first symbol queued at
++// the time of this call, so write the pattern first (or call this immediately
++// before sending).
++void tx_modulator_set_repeat(uint32_t n) {
 +    s_sym_loop_start = s_sym_tail;
-+    s_sym_loop = loop;
++    s_repeat = n;
++    s_passes_done = 0;
 +}
 +
-+bool tx_modulator_loop(void) {
-+    return s_sym_loop;
++uint32_t tx_modulator_repeat(void) {
++    return s_repeat;
++}
++
++// Drop any queued/looping pattern and stop repeating.  Safe to call while the
++// ISR runs (interrupts are briefly disabled).  Used to break a running loop
++// from the control layer before queuing a new pattern.
++void tx_modulator_clear_symbols(void) {
++    uint32_t irq = save_and_disable_interrupts();
++    s_sym_head = 0;
++    s_sym_tail = 0;
++    s_sym_loop_start = 0;
++    s_repeat = 1;
++    s_passes_done = 0;
++    s_sym_countdown = 1;
++    s_rf_key = false;
++    restore_interrupts(irq);
 +}
 +
 +void tx_modulator_set_key(bool on) {
@@ -2980,10 +3021,10 @@ index 0000000..aff0a56
 +#endif // MICROPY_HW_TX
 diff --git a/ports/rp2/tx/tx_modulator.h b/ports/rp2/tx/tx_modulator.h
 new file mode 100644
-index 0000000..efc4c72
+index 0000000..e8d60bb
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.h
-@@ -0,0 +1,220 @@
+@@ -0,0 +1,223 @@
 +/*
 + * tx_modulator.h
 + *
@@ -3086,10 +3127,13 @@ index 0000000..efc4c72
 +// Number of symbols still queued for transmission.
 +uint32_t tx_modulator_symbol_pending(void);
 +
-+// Loop the queued symbols forever (FSK/OOK/PSK).  Call after writing the
-+// pattern; the loop restarts at the first pending symbol.  false = one shot.
-+void tx_modulator_set_loop(bool loop);
-+bool tx_modulator_loop(void);
++// How many times the queued pattern is transmitted: 0 = forever, N = N passes.
++// The repeat restarts at the first symbol queued when this is called.
++void tx_modulator_set_repeat(uint32_t n);
++uint32_t tx_modulator_repeat(void);
++
++// Drop any queued/looping pattern and stop repeating (breaks a running loop).
++void tx_modulator_clear_symbols(void);
 +
 +// Manual key line for TX_MOD_CW: true = carrier on, false = RF off.
 +void tx_modulator_set_key(bool on);

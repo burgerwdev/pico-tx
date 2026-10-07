@@ -45,22 +45,25 @@
 | 命令 | 说明 | 示例 |
 |---|---|---|
 | `mode [名称]` | 查看/选择发射方式：`fm` `tone` `fsk` `ook` `cw` `chirp` `psk` | `mode tone` |
-| `tx on\|off` | 启动/停止调制引擎（非 FM 方式） | `tx off` |
+| `tx on\|off` | 启动/停止调制引擎（也会打断正在运行的 repeat） | `tx off` |
 | `tone <hz> [hz2] [level%]` | 内部 DDS 音调 FM 调制到载波；`tone off` 停止 | `tone 1000` |
-| `fsk <baud> <shift_hz> <hex> [loop]` | 排队 2-FSK 符号（`0`→-shift，`1`→+shift）；末尾加 `loop` 循环 | `fsk 1200 4500 55aa0f loop` |
-| `ook <baud> <hex> [loop]` | 排队开关键控符号（`0`→RF 关） | `ook 2000 aaaa loop` |
-| `psk <baud> <2\|4> <hex> [loop]` | 排队 BPSK（`2`）/ QPSK（`4`）符号 | `psk 2400 2 abcd` |
-| `cw <文本>` | 在载波上发摩斯（20 wpm，阻塞） | `cw CQ CQ DE PICO TX` |
+| `fsk <baud> <shift_hz> <hex> [repeat [n]]` | 排队 2-FSK 符号（`0`→-shift，`1`→+shift） | `fsk 1200 4500 55aa0f repeat 0` |
+| `ook <baud> <hex> [repeat [n]]` | 排队开关键控符号（`0`→RF 关） | `ook 2000 aaaa repeat 0` |
+| `psk <baud> <2\|4> <hex> [repeat [n]]` | 排队 BPSK（`2`）/ QPSK（`4`）符号 | `psk 2400 2 abcd` |
+| `cw <文本> [repeat [n]]` | 在载波上发摩斯（20 wpm） | `cw CQ CQ DE PICO TX repeat 0` |
 | `chirp <f0> <f1> <ms> [gap] [repeat]` | 线性扫频；`chirp off` 停止 | `chirp 87900000 88100000 100 20 1` |
 | `service [命令...]` | 开机自动执行的一条控制台命令（无头运行）；`service off` 清除 | `service tone 1000` |
 | `console on\|off` | 交互控制台开关；`off` 仅跑开机服务（Ctrl-C 回 REPL） | `console off` |
 
+`repeat [n]`：不加 = 发一次；`repeat` 或 `repeat 0` = 无限循环；`repeat n` = 共发 n 遍。
+循环在固件里跑，控制台不阻塞——任何新发送 / `mode` / `tx off` 都能**立即打断**。
+
 说明：
-- `fsk`/`ook`/`psk` 用固件内 256 符号 FIFO，超出部分会被拒绝（`send` 返回实际接受的数量）。`baud` 要配合 PLL 环路带宽（宽带 FM 下几 kbaud 量级）。
+- `fsk`/`ook`/`psk`/`cw` 共用固件内 1024 符号 FIFO，超出部分会被拒绝（`send` 返回实际接受的数量）。`baud` 要配合 PLL 环路带宽（宽带 FM 下几 kbaud 量级）。
 - `shift_hz` 必须落在 `init(carrier ± deviation)` 设定的 PLL 窗口内。
 - `chirp` 频率为绝对 Hz，同样必须在窗口内。
-- `cw` 是键控载波通断；只有把接收机调到该载波（窄带 FM/AM 或 SDR）才能听到摩斯。
-- `service` 开机后执行一条命令，例如 `service mode cw` 或 `service tone 1000`；搭配 `console off` 即为无头发射机。
+- `cw` 是把摩斯编码成 OOK（点/划 = 固定时长通断）；接收机调到该载波并用 CW/AM 模式才能听到。
+- `service` 开机后执行一条命令，例如 `service cw CQ DE PICO repeat 0` 或 `service tone 1000`；搭配 `console off` 即为无头信标。
 
 ## 说明
 

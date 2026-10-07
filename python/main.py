@@ -24,7 +24,7 @@ VERSION = "0.1.0"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
 # (release/firmware/picotx_firmware.uf2).  Shown by `ver`.
-FW_SHA256 = "78e3c85b631fe0e6f24a92dca5445a4f272b587b01eecc4b7f5351f7a98ff238"
+FW_SHA256 = "4bda0613f4e2622db89090723ee6eca7ad8acae96e1af580e5ff71dd9fc856ab"
 
 # Project links shown by the `ver` command.
 PROJECT_URL = "https://git.sr.ht/~bytewolf/rp2040-fm-transmitter"
@@ -191,71 +191,96 @@ def ring_stats():
     return None, None
 
 
-def build_help():
-    """Compact command reference (static text).  Full dynamic ranges are
-    shown by `status`; key behaviour notes are kept inline."""
-    return """\
-pico-tx console - commands (values in Hz unless stated):
-  help                 show this help
-  ver                  version, firmware sha256, project links
-  status               show all transmitter parameters (mode/carrier/range)
-  freq <Hz>            fine-tune carrier (effective freq; live within the
-                       current PLL band, else reboots; UHF targets use the
-                       3rd/5th harmonic of a <=150MHz fundamental)
-  dev <Hz>             set full-scale deviation (effective; max: half the
-                       PLL range x harmonic)
-  reinit <car> <dev> [pin]   save band/deviation/RF pin, then reboot
-                       (UHF 409/433/440M targets are converted to the
-                       fundamental x harmonic automatically)
-  band <fm|2m|409|433|446>  one-command band preset (sets refdiv + silence
-                       gate + NFM audio)
-  trim <±Hz>           fine frequency trim (effective; compensates the
-                       crystal offset; applies immediately)
-  silence <auto|park|gate>  silent-state behaviour: auto = FM parks the
-                       carrier, narrowband keys RF off (handheld squelch)
-  pre on|off|50|75|300  15kHz band-limit + pre-emphasis + limiter
-                       (300us = handheld-radio standard)
-  pdm <1|2|3|4>        PDM dither rate in MHz (1 = default; saves, reboots)
-  refdiv <1|2|auto>    PLL reference divider (saves, reboots)
-  pin <21|23|24|25>    change RF output GPIO (saves and reboots)
-  pwr <2|4|8|12>       RF output drive strength in mA (12 = max, default)
-  rf on|off            RF output on/off
-  tx on|off            modulation engine on/off (non-FM schemes)
-  mode [name]          select transmit mode: fm|tone|fsk|ook|cw|chirp|psk
-                         fm    = USB audio -> FM (default)
-                         tone  = internal DDS tone(s) -> FM
-                         fsk   = symbol stream -> carrier +/- shift
-                         ook   = symbol stream -> RF on/off
-                         cw    = Morse keying
-                         chirp = linear frequency sweep
-                         psk   = BPSK/QPSK (constant envelope)
-  tone <hz> [hz2] [lvl]  internal tone generator (lvl % 0-100) | tone off
-  fsk <baud> <shift> <hex> [loop]   send 2-FSK symbols (append 'loop' to repeat)
-  ook <baud> <hex> [loop]           send on/off keying symbols
-  psk <baud> <2|4> <hex> [loop]     send BPSK/QPSK symbols
-  cw <text>                  send Morse on the carrier (20 wpm)
-  chirp <f0> <f1> <ms> [gap] [repeat]   linear sweep | chirp off
-  service [cmd...]     command to run at boot (headless) | service off
-  console on|off       interactive console on/off (off = headless service)
-  audio on|off         USB-audio -> FM routing on/off
-  vol <0-100>          volume in percent (mute == vol 0)
-  mute on|off          mute the audio stream
-  pre on|off|50|75     15kHz band-limit + pre-emphasis (50/75us) + limiter
-  sq <0-100>           mute weak samples below this % of full scale (0 = off)
-  led <0|1|2|3>        LED mode: 0 off, 1 always, 2 stream, 3 audio VU
-  ledpin <0-29>        set plain-LED GPIO (saves and reboots)
-  ledpin ws2812 [gpio] use a WS2812 NeoPixel as the status LED
-  vbar                 audio level meter (T = sq threshold; 'silent' when quiet)
-  ring                 ring buffer fill % (watch for under/overflow)
-  diag [s]             ISR/RX rates + ring drift counters (default 1s, max 60)
-  pwm                  PWM slice registers + ISR cost
-  cls                  clear the terminal screen
-  sweep [lo hi step]   pause audio and sweep the carrier (PLL self-test)
-  pll                  PLL diagnostics (ready/range/last written freq)
-  reboot               save current settings and reboot (keep config)
-  reset                delete saved config and reboot to defaults
-  exit                 stop the console (back to the REPL)
-"""
+# Command categories for the two-level help.  `help <category>` lists one
+# group; `help <command>` still shows the long CMD_DETAILS entry below.
+HELP_CATEGORIES = [
+    ("carrier", "carrier / deviation / output", [
+        ("freq <Hz>", "fine-tune carrier (effective; live in-band, else reboot)"),
+        ("dev <Hz>", "full-scale deviation (effective)"),
+        ("reinit <car> <dev> [pin]", "save carrier/deviation/pin and reboot"),
+        ("band <fm|2m|409|433|446>", "band preset (save + reboot)"),
+        ("trim <+/-Hz>", "frequency trim to null the crystal offset"),
+        ("pin <21|23|24|25>", "RF output GPIO (save + reboot)"),
+        ("pwr <2|4|8|12>", "RF drive strength in mA"),
+        ("rf on|off", "RF output on/off"),
+        ("silence <auto|park|gate>", "silent-state behaviour"),
+    ]),
+    ("sound", "USB audio -> FM path (mode fm)", [
+        ("audio on|off", "USB audio -> FM routing"),
+        ("vol <0-100>", "volume in percent"),
+        ("mute on|off", "mute the audio stream"),
+        ("pre on|off|50|75|300", "pre-emphasis + band-limit + limiter"),
+        ("sq <0-100>", "zero samples below this % of full scale (0 = off)"),
+    ]),
+    ("modes", "transmit modes and symbol senders", [
+        ("mode <fm|tone|fsk|ook|cw|chirp|psk>", "select the transmit scheme"),
+        ("tx on|off", "start/stop the modulation engine"),
+        ("tone <hz> [hz2] [lvl%]", "internal DDS tone(s) -> FM | tone off"),
+        ("fsk <baud> <shift> <hex> [repeat [n]]", "2-FSK symbols"),
+        ("ook <baud> <hex> [repeat [n]]", "on/off keying symbols"),
+        ("psk <baud> <2|4> <hex> [repeat [n]]", "BPSK/QPSK symbols"),
+        ("cw <text> [repeat [n]]", "Morse on the carrier (20 wpm)"),
+        ("chirp <f0> <f1> <ms> [gap] [repeat]", "linear sweep | chirp off"),
+        ("", "repeat: absent = once, 0 = forever, n = n times"),
+    ]),
+    ("tuning", "PLL tuning", [
+        ("refdiv <1|2|auto>", "PLL reference divider (save + reboot)"),
+        ("pdm <1|2|3|4>", "PDM dither rate in MHz (save + reboot)"),
+    ]),
+    ("debug", "status, meters and diagnostics", [
+        ("status / s", "show all transmitter parameters"),
+        ("vbar", "live audio level meter"),
+        ("ring", "ring buffer fill %"),
+        ("diag [s]", "ISR/RX rates + clock drift (default 1s, max 60)"),
+        ("pwm", "PWM slice registers + ISR cost"),
+        ("pll", "PLL diagnostics"),
+        ("sweep [lo hi step]", "sweep the carrier (PLL self-test)"),
+    ]),
+    ("system", "console and system", [
+        ("ver", "version, firmware sha256, project links"),
+        ("led <0|1|2|3>", "LED mode: 0 off, 1 always, 2 stream, 3 VU"),
+        ("ledpin <0-29> | ws2812 [gpio]", "status LED pin (save + reboot)"),
+        ("service [cmd...]", "command to run at boot (headless) | service off"),
+        ("console on|off", "interactive console on/off"),
+        ("reboot", "save current settings and reboot"),
+        ("reset", "delete saved config and reboot to defaults"),
+        ("cls", "clear the terminal screen"),
+        ("exit", "leave the console (back to the REPL)"),
+        ("help [category|command]", "this help"),
+    ]),
+]
+
+
+def build_help(what=None):
+    """Two-level help.  what=None -> category index; a category name -> its
+    commands; 'all' -> every category; anything else -> None so the caller
+    falls back to the per-command CMD_DETAILS text."""
+    if what is None:
+        lines = ["pico-tx console - command categories:",
+                 "  help              this index",
+                 "  help <category>   commands in one category (e.g. help modes)",
+                 "  help <command>    detailed help for one command",
+                 "  help all          every command",
+                 ""]
+        for key, title, _cmds in HELP_CATEGORIES:
+            lines.append("  %-8s %s" % (key, title))
+        return "\n".join(lines)
+    w = what.lower()
+    if w == "all":
+        out = []
+        for key, title, cmds in HELP_CATEGORIES:
+            out.append("== %s (%s) ==" % (key, title))
+            for c, d in cmds:
+                out.append("  %-38s %s" % (c, d))
+            out.append("")
+        return "\n".join(out)
+    for key, title, cmds in HELP_CATEGORIES:
+        if key == w:
+            out = ["%s - %s" % (key, title)]
+            for c, d in cmds:
+                out.append("  %-38s %s" % (c, d))
+            return "\n".join(out)
+    return None
 
 
 # Detailed help for `help <command>`: purpose, arguments, defaults, example.
@@ -490,25 +515,44 @@ def parse_hex_bytes(s):
         return None
 
 
-def send_morse(text, wpm=20):
-    """Key `text` as Morse on the active carrier (scheme=cw).  Blocking."""
-    dot = int(1200 / wpm)  # ms per dot at `wpm` words/minute
-    pico_tx.set_mode("cw")
-    pico_tx.start()
+def morse_ook(text, wpm=20):
+    """Encode `text` as an OOK symbol stream (1 = carrier on, 0 = off) at the
+    Morse element rate.  Returns (baud, bytes).  Because CW is just keyed
+    OOK, it reuses the symbol engine, so `repeat` works for CW too and the
+    console is never blocked while sending."""
+    baud = max(1, (wpm * 5 + 3) // 6)  # dot = 1/baud s; wpm*5/6 rounded
+    syms = []
     for ch in text.upper():
         if ch == " ":
-            time.sleep_ms(dot * 7)
+            syms.extend((0, 0, 0, 0))   # char gap 3 + 4 = 7 (word gap)
             continue
         code = MORSE.get(ch)
         if code is None:
             continue
-        for sym in code:
-            pico_tx.key(True)
-            time.sleep_ms(dot if sym == "." else dot * 3)
-            pico_tx.key(False)
-            time.sleep_ms(dot)
-        time.sleep_ms(dot * 3)
-    pico_tx.key(False)
+        for e in code:
+            if e == ".":
+                syms.extend((1, 0))
+            else:
+                syms.extend((1, 1, 1, 0))
+        syms.extend((0, 0))             # 3 total between characters
+    syms.extend((0, 0, 0))              # trailing gap
+    return baud, bytes(syms)
+
+
+def parse_repeat(parts):
+    """Pop a trailing 'repeat [n]' from a token list.  Returns (n, toks):
+    n = 1 (no repeat), 0 (forever), or the given count; toks has the tokens
+    with the repeat clause removed."""
+    toks = list(parts)
+    if toks and toks[-1].lower() == "repeat":
+        return 0, toks[:-1]
+    if len(toks) >= 2 and toks[-2].lower() == "repeat":
+        n = parse_int(toks[-1], "repeat count")
+        if n is None or n < 0:
+            print("repeat count must be 0 (forever) or a positive number")
+            return None, toks
+        return n, toks[:-2]
+    return 1, toks
 
 
 def load_cfg():
@@ -862,11 +906,15 @@ def do_command(line):
             if arg is None:
                 print(build_help())
             else:
-                d = CMD_DETAILS.get(arg.lower())
-                if d is None:
-                    print("no detailed help for '%s'" % arg)
+                h = build_help(arg)
+                if h is not None:
+                    print(h)
                 else:
-                    print(d)
+                    d = CMD_DETAILS.get(arg.lower())
+                    if d is None:
+                        print("no help for '%s' (try 'help' for the category index)" % arg)
+                    else:
+                        print(d)
         elif cmd == "ver":
             print("pico-tx v%s" % VERSION)
             print("Firmware sha256: %s" % FW_SHA256)
@@ -1090,6 +1138,7 @@ def do_command(line):
                 print("usage: mode <fm|tone|fsk|ook|cw|chirp|psk>")
             elif arg in ("fm", "tone", "fsk", "ook", "cw", "chirp", "psk"):
                 MODE = arg
+                pico_tx.clear_symbols()   # break any running repeat
                 pico_tx.set_mode(arg)
                 if arg == "fm":
                     pico_tx.audio(AUDIO_ON)
@@ -1107,6 +1156,7 @@ def do_command(line):
                     pico_tx.start()
                 else:
                     pico_tx.stop()
+                    pico_tx.clear_symbols()   # break any running repeat
                 print("tx %s" % arg)
         elif cmd == "tone":
             if arg is None or arg == "off":
@@ -1126,52 +1176,63 @@ def do_command(line):
                 else:
                     print("usage: tone <hz> [hz2] [level%% 0-100]  |  tone off")
         elif cmd in ("fsk", "ook", "psk"):
-            if arg is None or arg2 is None:
-                print("usage: %s <baud> %s <hex-symbols> [loop]"
+            rep, toks = parse_repeat(parts[1:])
+            need = 2 if cmd == "ook" else 3
+            data = None
+            baud = None
+            if rep is None or len(toks) < need:
+                print("usage: %s <baud> %s <hex-symbols> [repeat [n]]"
                       % (cmd, "<shift_hz>" if cmd == "fsk" else ("<order 2|4>" if cmd == "psk" else "")))
-                print("  e.g. fsk 1200 4500 55aa0f  |  ook 2000 aaaa loop  |  psk 2400 2 abcd")
+                print("  e.g. fsk 1200 4500 55aa0f  |  ook 2000 aaaa repeat 0  |  psk 2400 2 abcd repeat 5")
             else:
-                baud = parse_int(arg, "baud")
-                data = None
-                hex_idx = 2 if cmd == "ook" else 3
-                loop = len(parts) > hex_idx + 1 and parts[hex_idx + 1].lower() in ("loop", "rep", "repeat", "on")
-                if baud is None or baud <= 0:
-                    data = None
-                elif cmd == "fsk":
-                    shift = parse_int(arg2, "shift Hz")
-                    data = parse_hex_bytes(parts[3]) if len(parts) > 3 else None
-                    if shift is not None and data is not None:
-                        MODE = "fsk"
-                        pico_tx.fsk_config(baud, shift)
-                elif cmd == "psk":
-                    order = parse_int(arg2, "order 2|4")
-                    data = parse_hex_bytes(parts[3]) if len(parts) > 3 else None
-                    if order in (2, 4) and data is not None:
-                        MODE = "psk"
-                        pico_tx.psk_config(baud, order)
-                else:  # ook
-                    data = parse_hex_bytes(arg2)
-                    if data is not None:
-                        MODE = "ook"
-                        pico_tx.ook_config(baud)
+                baud = parse_int(toks[0], "baud")
+                if baud is not None and baud > 0:
+                    if cmd == "fsk":
+                        shift = parse_int(toks[1], "shift Hz")
+                        data = parse_hex_bytes(toks[2]) if shift is not None else None
+                        if data is not None:
+                            MODE = "fsk"
+                            pico_tx.fsk_config(baud, shift)
+                    elif cmd == "psk":
+                        order = parse_int(toks[1], "order 2|4")
+                        data = parse_hex_bytes(toks[2]) if order in (2, 4) else None
+                        if data is not None:
+                            MODE = "psk"
+                            pico_tx.psk_config(baud, order)
+                    else:  # ook
+                        data = parse_hex_bytes(toks[1])
+                        if data is not None:
+                            MODE = "ook"
+                            pico_tx.ook_config(baud)
                 if data is None:
-                    print("usage: %s <baud> ... <hex-symbols> [loop]" % cmd)
+                    print("usage: %s <baud> ... <hex-symbols> [repeat [n]]" % cmd)
                 else:
-                    pico_tx.set_loop(loop)
+                    pico_tx.clear_symbols()
+                    pico_tx.set_repeat(rep)
                     pico_tx.start()
                     n = pico_tx.send(data)
-                    print("%s %d baud: queued %d/%d symbols (%d pending)%s"
-                          % (cmd.upper(), baud, n, len(data), pico_tx.pending(),
-                             " - looping" if loop else ""))
+                    print("%s %d baud: queued %d/%d symbols%s"
+                          % (cmd.upper(), baud, n, len(data),
+                             " - repeat forever" if rep == 0
+                             else (" - x%d" % rep if rep > 1 else "")))
         elif cmd == "cw":
-            text = " ".join(parts[1:])
-            if not text:
-                print("usage: cw <text>  (Morse on the carrier, 20 wpm)")
+            rep, toks = parse_repeat(parts[1:])
+            text = " ".join(toks)
+            if rep is None or not text:
+                print("usage: cw <text> [repeat [n]]  (Morse on the carrier, 20 wpm)")
             else:
+                baud, data = morse_ook(text)
                 MODE = "cw"
-                print("sending '%s'..." % text)
-                send_morse(text)
-                print("cw done")
+                pico_tx.set_mode("cw")
+                pico_tx.set_symbol_rate(baud)
+                pico_tx.clear_symbols()
+                pico_tx.set_repeat(rep)
+                pico_tx.start()
+                n = pico_tx.send(data)
+                print("cw 20 wpm (baud %d): queued %d/%d elements%s"
+                      % (baud, n, len(data),
+                         " - repeat forever" if rep == 0
+                         else (" - x%d" % rep if rep > 1 else "")))
         elif cmd == "chirp":
             if arg is None or arg == "off":
                 pico_tx.chirp_stop()
