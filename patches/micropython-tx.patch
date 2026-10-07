@@ -199,10 +199,10 @@ index 0000000..1cdd102
 +target_link_libraries(usermod INTERFACE usermod_pico_tx)
 diff --git a/ports/rp2/tx/modpico_tx.c b/ports/rp2/tx/modpico_tx.c
 new file mode 100644
-index 0000000..4ef5925
+index 0000000..bbb1ec0
 --- /dev/null
 +++ b/ports/rp2/tx/modpico_tx.c
-@@ -0,0 +1,782 @@
+@@ -0,0 +1,789 @@
 +/*
 + * modpico_tx.c
 + *
@@ -281,7 +281,7 @@ index 0000000..4ef5925
 +// ---------------------------------------------------------------------------
 +
 +static mp_obj_t mod_pico_tx_enable_output(mp_obj_t enable_obj) {
-+    pico_fractional_pll_enable_output(mp_obj_is_true(enable_obj));
++    tx_modulator_enable_output(mp_obj_is_true(enable_obj));
 +    return mp_const_none;
 +}
 +static MP_DEFINE_CONST_FUN_OBJ_1(mod_pico_tx_enable_output_obj, mod_pico_tx_enable_output);
@@ -428,7 +428,7 @@ index 0000000..4ef5925
 +
 +static mp_obj_t mod_pico_tx_deinit(void) {
 +    tx_modulator_audio_stop();
-+    pico_fractional_pll_enable_output(false);
++    tx_modulator_enable_output(false);
 +    pico_fractional_pll_deinit();
 +    s_ready = false;
 +    return mp_const_none;
@@ -763,6 +763,12 @@ index 0000000..4ef5925
 +}
 +static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_mode_obj, mod_pico_tx_mode);
 +
++// pico_tx.output_on() -> True while the RF output is armed
++static mp_obj_t mod_pico_tx_output_on(void) {
++    return mp_obj_new_bool(tx_modulator_output_on());
++}
++static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_output_on_obj, mod_pico_tx_output_on);
++
 +// pico_tx.running() -> True while the modulation engine is started
 +static mp_obj_t mod_pico_tx_running(void) {
 +    return mp_obj_new_bool(tx_modulator_running());
@@ -957,6 +963,7 @@ index 0000000..4ef5925
 +    { MP_ROM_QSTR(MP_QSTR_set_mode), MP_ROM_PTR(&mod_pico_tx_set_mode_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_mode), MP_ROM_PTR(&mod_pico_tx_mode_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_running), MP_ROM_PTR(&mod_pico_tx_running_obj) },
++    { MP_ROM_QSTR(MP_QSTR_output_on), MP_ROM_PTR(&mod_pico_tx_output_on_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_start), MP_ROM_PTR(&mod_pico_tx_start_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_stop), MP_ROM_PTR(&mod_pico_tx_stop_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_tone), MP_ROM_PTR(&mod_pico_tx_tone_obj) },
@@ -1628,10 +1635,10 @@ index 0000000..a58875f
 +#endif // _PICO_FRACTIONAL_PLL_H
 diff --git a/ports/rp2/tx/tx_modulator.c b/ports/rp2/tx/tx_modulator.c
 new file mode 100644
-index 0000000..f5143f5
+index 0000000..db716e4
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.c
-@@ -0,0 +1,1403 @@
+@@ -0,0 +1,1419 @@
 +/*
 + * tx_modulator.c
 + *
@@ -1744,6 +1751,7 @@ index 0000000..f5143f5
 +static volatile uint32_t s_isr_ticks;   // 48kHz ISR invocation counter
 +static volatile uint32_t s_rx_frames;   // mono frames enqueued by the RX path
 +static volatile bool s_running;         // the 48kHz modulation engine is started
++static volatile bool s_output_on;       // RF output armed (rf on / engine start)
 +
 +static void tx_led_configure(void);
 +static void tx_led_apply(void);
@@ -2158,6 +2166,7 @@ index 0000000..f5143f5
 +    s_isr_ticks = 0;
 +    s_rx_frames = 0;
 +    s_running = false;
++    s_output_on = false;
 +
 +    // General transmit-scheme state.
 +    s_scheme = TX_MOD_FM;
@@ -2242,9 +2251,22 @@ index 0000000..f5143f5
 +    return s_running;
 +}
 +
++// Arm/disarm the RF output.  Output changes that should be visible via
++// tx_modulator_output_on() go through here; the ISR's per-symbol keying and
++// the FM silence gate call the PLL directly, so they do not change the armed
++// state (the instantaneous key/gate is reported by tx_modulator_rf_gated()).
++void tx_modulator_enable_output(bool on) {
++    s_output_on = on;
++    pico_fractional_pll_enable_output(on);
++}
++
++bool tx_modulator_output_on(void) {
++    return s_output_on;
++}
++
 +void tx_modulator_start(void) {
 +    tx_pwm_start();
-+    pico_fractional_pll_enable_output(true);
++    tx_modulator_enable_output(true);
 +    s_rf_key_applied = true;
 +    s_rf_gated = false;
 +    if (s_scheme == TX_MOD_FM) {
@@ -2260,7 +2282,7 @@ index 0000000..f5143f5
 +        s_last_freq = s_carrier_hz;
 +    } else {
 +        // Narrowband FM and every keyed scheme: key the RF off.
-+        pico_fractional_pll_enable_output(false);
++        tx_modulator_enable_output(false);
 +        s_rf_gated = true;
 +    }
 +    s_audio_route_on = false;
@@ -2427,6 +2449,7 @@ index 0000000..f5143f5
 +    s_ring_tail = 0;
 +    s_cur_sample = 0;
 +    tx_pwm_start();
++    tx_modulator_enable_output(true);   // starting the FM route arms the output
 +    s_audio_route_on = true;
 +}
 +
@@ -2435,7 +2458,7 @@ index 0000000..f5143f5
 +    if (s_gate_silent) {
 +        // Narrowband mode: key the output off - an unmodulated parked carrier
 +        // would be an off-tune CW heard as a tone by a handheld radio.
-+        pico_fractional_pll_enable_output(false);
++        tx_modulator_enable_output(false);
 +        s_rf_gated = true;
 +    } else {
 +        // 'audio off' should silence the radio: park the PLL on the EXACT
@@ -3037,10 +3060,10 @@ index 0000000..f5143f5
 +#endif // MICROPY_HW_TX
 diff --git a/ports/rp2/tx/tx_modulator.h b/ports/rp2/tx/tx_modulator.h
 new file mode 100644
-index 0000000..cb57889
+index 0000000..49ed731
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.h
-@@ -0,0 +1,226 @@
+@@ -0,0 +1,230 @@
 +/*
 + * tx_modulator.h
 + *
@@ -3112,6 +3135,10 @@ index 0000000..cb57889
 +
 +// True while the 48kHz modulation engine (PWM ISR) is running.
 +bool tx_modulator_running(void);
++
++// Arm/disarm the RF output; tx_modulator_output_on() reports the armed state.
++void tx_modulator_enable_output(bool on);
++bool tx_modulator_output_on(void);
 +
 +// Start/stop the 48 kHz sample-clock interrupt (the modulation engine).
 +// FM also requires the host to have selected a non-zero alternate setting.

@@ -24,7 +24,7 @@ VERSION = "0.1.0"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
 # (release/firmware/picotx_firmware.uf2).  Shown by `ver`.
-FW_SHA256 = "8c085b5a6ba900026ef6b9fdfbf55078e3ab989838c4f10b9103b2e8d8f9dc2b"
+FW_SHA256 = "6988b9d17aa44e99d6b5da99ad9335f896ba1a6ebfbb062c6eaaf5b37411d02c"
 
 # Project links shown by the `ver` command.
 PROJECT_URL = "https://git.sr.ht/~bytewolf/rp2040-fm-transmitter"
@@ -61,7 +61,6 @@ REINIT_DEV_MAX = 500_000
 
 # Console-tracked state (the firmware exposes the audio params but not these
 # switches, so the console remembers what it set).
-RF_ON = True
 AUDIO_ON = True
 # "on" | "50" | "off" - current pre-emphasis setting (on == 75us).
 PREEMPH = DEFAULT_PREEMPH
@@ -760,7 +759,7 @@ def show_status():
               % (pico_tx.pending(), "forever" if rep == 0 else ("x%d" % rep)))
     if LAST_TX:
         print("Last TX        : %s" % LAST_TX)
-    if not RF_ON:
+    if not pico_tx.output_on():
         rf_txt = "OFF (rf off)"
     elif not pico_tx.running():
         rf_txt = "OFF (engine stopped)"
@@ -856,7 +855,7 @@ def show_log():
                 car = "%.3fM x%d" % (TARGET_FREQ / 1e6, HARMONIC)
             else:
                 car = "%.4f MHz" % (pico_tx.carrier() / 1e6)
-            if not run:
+            if not run or not pico_tx.output_on():
                 rf = "off"
             elif mode in ("ook", "cw"):
                 rf = "key"       # keyed on/off, not a continuous carrier
@@ -992,7 +991,7 @@ def vbar():
 
 
 def do_command(line, autolog=True):
-    global RF_ON, AUDIO_ON, PREEMPH, SQUELCH_PCT, HARMONIC, TARGET_FREQ, DEV_EFF, SILENCE_MODE, TRIM_HZ
+    global AUDIO_ON, PREEMPH, SQUELCH_PCT, HARMONIC, TARGET_FREQ, DEV_EFF, SILENCE_MODE, TRIM_HZ
     global MODE, SERVICE, LAST_CHIRP, LAST_TX
     parts = line.split()
     if not parts:
@@ -1224,8 +1223,7 @@ def do_command(line, autolog=True):
                 print("usage: rf on|off")
             else:
                 pico_tx.enable_output(arg == "on")
-                RF_ON = arg == "on"
-                print("RF output %s" % arg)
+                print("RF output %s" % ("on" if pico_tx.output_on() else "off"))
         elif cmd == "audio":
             if arg not in ("on", "off"):
                 print("usage: audio on|off")
@@ -1239,6 +1237,8 @@ def do_command(line, autolog=True):
                 print("usage: mode <fm|tone|fsk|ook|cw|chirp|psk>")
             elif arg in ("fm", "tone", "fsk", "ook", "cw", "chirp", "psk"):
                 MODE = arg
+                LAST_TX = ""              # payload belongs to the previous mode
+                LAST_CHIRP = (0, 0, 0)
                 pico_tx.clear_symbols()   # break any running repeat
                 pico_tx.set_mode(arg)
                 if arg == "fm":
@@ -1258,6 +1258,8 @@ def do_command(line, autolog=True):
                 else:
                     pico_tx.stop()
                     pico_tx.clear_symbols()   # break any running repeat
+                    LAST_TX = ""
+                    LAST_CHIRP = (0, 0, 0)
                 print("tx %s" % arg)
         elif cmd == "tone":
             if arg is None or arg == "off":
