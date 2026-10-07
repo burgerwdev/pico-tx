@@ -58,7 +58,7 @@ index 0000000..0ec0194
 +set(MICROPY_HW_TX 1)
 diff --git a/ports/rp2/boards/RPI_PICO_TX/mpconfigboard.h b/ports/rp2/boards/RPI_PICO_TX/mpconfigboard.h
 new file mode 100644
-index 0000000..6e6262b
+index 0000000..dd4b3c8
 --- /dev/null
 +++ b/ports/rp2/boards/RPI_PICO_TX/mpconfigboard.h
 @@ -0,0 +1,20 @@
@@ -77,7 +77,7 @@ index 0000000..6e6262b
 +// so reusing it for a CDC+Audio composite makes Windows fail to load drivers
 +// (yellow exclamation marks).  Use a distinct PID instead.
 +#define MICROPY_HW_USB_VID                      (0x1209) // pid.codes (prototype)
-+#define MICROPY_HW_USB_PID                      (0xFA51) // pico-tx
++#define MICROPY_HW_USB_PID                      (0xFA50) // pico-tx (same as the original rp2040-fm-transmitter)
 +
 +// USB strings shown in the OS (Device Manager / dmesg).
 +#define MICROPY_HW_USB_MANUFACTURER_STRING      "BurgerW"

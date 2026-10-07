@@ -9,7 +9,7 @@
 #
 # This script:
 #   1. resolves the board's CDC port by its USB IDs (tools/pico_port.sh,
-#      1209:fa51) so another ttyACM device - a PlutoSDR, an ST-Link, a
+#      1209:fa50) so another ttyACM device - a PlutoSDR, an ST-Link, a
 #      second Pico - cannot be picked by mistake;
 #   2. opens that port, probes the REPL state by sending CR (Enter) and
 #      watching for the prompt:

@@ -1,6 +1,6 @@
 # pico-tx (RP2040 RF transmitter) - USB CDC access for the flashing/upload tools.
 #
-# The firmware enumerates as VID:PID 1209:fa51 (product "pico-tx").  Without
+# The firmware enumerates as VID:PID 1209:fa50 (product "pico-tx").  Without
 # this rule the CDC port is root:uucp 0660, so tools/upload.sh and
 # tools/serial.sh fail with "Permission denied".
 #
@@ -10,4 +10,4 @@
 # then replug the Pico.
 #
 # Gives world read/write access to the tty and a stable /dev/pico symlink.
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="fa51", MODE="0666", SYMLINK+="pico"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1209", ATTRS{idProduct}=="fa50", MODE="0666", SYMLINK+="pico"

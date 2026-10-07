@@ -1,3 +1,3 @@
 # pico-tx - prebuilt firmware for MicroPython v1.29.0 (patch patches/micropython-tx.patch)
-# Verify from the repo root:  sha256sum -c firmware/sha256.txt
-9bd6f49e7ba5032209cdb45fd0bb6867429639d8495fb2275b20631d4b0f7112  firmware/picotx_firmware.uf2
+# USB 1209:fa50. Verify from the repo root:  sha256sum -c firmware/sha256.txt
+1801572a7daf306b0201b56f04123f15879e68475661b9044337c17cd2822301  firmware/picotx_firmware.uf2
