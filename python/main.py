@@ -1307,8 +1307,6 @@ def do_command(line, autolog=True):
                     pico_tx.stop()
                     extra = " - paused, %d symbols left" % pico_tx.pending() if pico_tx.pending() else ""
                     print("tx off%s" % extra)
-                if autolog:
-                    show_log()
         elif cmd == "tone":
             if arg is None or arg == "off":
                 pico_tx.tone_stop()
