@@ -24,7 +24,7 @@ VERSION = "0.1.0"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
 # (release/firmware/picotx_firmware.uf2).  Shown by `ver`.
-FW_SHA256 = "672d042d868f3e47c4457f01d9f6aacdb386fd34481075f247ead4e2162cf687"
+FW_SHA256 = "78e3c85b631fe0e6f24a92dca5445a4f272b587b01eecc4b7f5351f7a98ff238"
 
 # Project links shown by the `ver` command.
 PROJECT_URL = "https://git.sr.ht/~bytewolf/rp2040-fm-transmitter"
@@ -221,6 +221,7 @@ pico-tx console - commands (values in Hz unless stated):
   pwr <2|4|8|12>       RF output drive strength in mA (12 = max, default)
   rf on|off            RF output on/off
   tx on|off            modulation engine on/off (non-FM schemes)
+  loop on|off          repeat the queued FSK/OOK/PSK symbols forever
   mode [name]          select transmit mode: fm|tone|fsk|ook|cw|chirp|psk
                          fm    = USB audio -> FM (default)
                          tone  = internal DDS tone(s) -> FM
@@ -1108,6 +1109,12 @@ def do_command(line):
                 else:
                     pico_tx.stop()
                 print("tx %s" % arg)
+        elif cmd == "loop":
+            if arg not in ("on", "off"):
+                print("usage: loop on|off  (repeat the queued FSK/OOK/PSK symbols forever)")
+            else:
+                pico_tx.set_loop(arg == "on")
+                print("symbol loop %s" % arg)
         elif cmd == "tone":
             if arg is None or arg == "off":
                 pico_tx.tone_stop()

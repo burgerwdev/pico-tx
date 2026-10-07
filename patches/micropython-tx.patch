@@ -199,10 +199,10 @@ index 0000000..1cdd102
 +target_link_libraries(usermod INTERFACE usermod_pico_tx)
 diff --git a/ports/rp2/tx/modpico_tx.c b/ports/rp2/tx/modpico_tx.c
 new file mode 100644
-index 0000000..413c8a9
+index 0000000..864b007
 --- /dev/null
 +++ b/ports/rp2/tx/modpico_tx.c
-@@ -0,0 +1,743 @@
+@@ -0,0 +1,757 @@
 +/*
 + * modpico_tx.c
 + *
@@ -832,6 +832,18 @@ index 0000000..413c8a9
 +}
 +static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_pending_obj, mod_pico_tx_pending);
 +
++// pico_tx.set_loop(bool) / pico_tx.loop() - repeat the queued symbols forever
++static mp_obj_t mod_pico_tx_set_loop(mp_obj_t loop_obj) {
++    tx_modulator_set_loop(mp_obj_is_true(loop_obj));
++    return mp_const_none;
++}
++static MP_DEFINE_CONST_FUN_OBJ_1(mod_pico_tx_set_loop_obj, mod_pico_tx_set_loop);
++
++static mp_obj_t mod_pico_tx_loop(void) {
++    return mp_obj_new_bool(tx_modulator_loop());
++}
++static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_loop_obj, mod_pico_tx_loop);
++
 +// pico_tx.key(bool) - manual CW/OOK key line
 +static mp_obj_t mod_pico_tx_key(mp_obj_t on_obj) {
 +    tx_modulator_set_key(mp_obj_is_true(on_obj));
@@ -933,6 +945,8 @@ index 0000000..413c8a9
 +    { MP_ROM_QSTR(MP_QSTR_psk_config), MP_ROM_PTR(&mod_pico_tx_psk_config_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_send), MP_ROM_PTR(&mod_pico_tx_send_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_pending), MP_ROM_PTR(&mod_pico_tx_pending_obj) },
++    { MP_ROM_QSTR(MP_QSTR_set_loop), MP_ROM_PTR(&mod_pico_tx_set_loop_obj) },
++    { MP_ROM_QSTR(MP_QSTR_loop), MP_ROM_PTR(&mod_pico_tx_loop_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_key), MP_ROM_PTR(&mod_pico_tx_key_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_chirp), MP_ROM_PTR(&mod_pico_tx_chirp_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_chirp_stop), MP_ROM_PTR(&mod_pico_tx_chirp_stop_obj) },
@@ -1589,10 +1603,10 @@ index 0000000..a58875f
 +#endif // _PICO_FRACTIONAL_PLL_H
 diff --git a/ports/rp2/tx/tx_modulator.c b/ports/rp2/tx/tx_modulator.c
 new file mode 100644
-index 0000000..5820e74
+index 0000000..aff0a56
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.c
-@@ -0,0 +1,1348 @@
+@@ -0,0 +1,1371 @@
 +/*
 + * tx_modulator.c
 + *
@@ -1849,6 +1863,8 @@ index 0000000..5820e74
 +static uint32_t s_psk_phase;              // PSK phase accumulator (2^32 = 2pi)
 +static volatile bool s_rf_key;            // CW / OOK key state
 +static volatile bool s_rf_key_applied = true; // last key state pushed to the GPOUT
++static volatile bool s_sym_loop;          // repeat the symbol FIFO forever
++static volatile uint16_t s_sym_loop_start; // FIFO index where the loop restarts
 +static volatile uint32_t s_sym_sent;      // symbols actually consumed
 +
 +// --- linear chirp (TX_MOD_CHIRP) ---
@@ -1863,6 +1879,12 @@ index 0000000..5820e74
 +// the PSK phase step is affordable.
 +static void __not_in_flash_func(tx_symbol_load)(void) {
 +    uint16_t tail = s_sym_tail;
++    // Loop mode: when the FIFO drains, restart at the first queued symbol so
++    // a fixed pattern (FSK/OOK/PSK) repeats forever in hardware.
++    if (tail == s_sym_head && s_sym_loop && s_sym_loop_start != s_sym_head) {
++        tail = s_sym_loop_start;
++        s_sym_tail = tail;
++    }
 +    uint8_t sym = 0;
 +    if (tail != s_sym_head) {
 +        sym = s_sym_fifo[tail];
@@ -2120,6 +2142,8 @@ index 0000000..5820e74
 +    s_psk_phase = 0;
 +    s_rf_key = false;
 +    s_rf_key_applied = true;
++    s_sym_loop = false;
++    s_sym_loop_start = 0;
 +    s_sym_sent = 0;
 +    s_chirp_f0 = 0;
 +    s_chirp_f1 = 0;
@@ -2288,6 +2312,19 @@ index 0000000..5820e74
 +
 +uint32_t tx_modulator_symbol_pending(void) {
 +    return (uint32_t)((s_sym_head - s_sym_tail) & TX_SYM_FIFO_MASK);
++}
++
++// Loop the currently queued symbols forever (FSK/OOK/PSK).  Enable it after
++// the pattern has been written; the loop restarts at the first pending symbol.
++// Calling this stops accepting the loop point again until the queue drains,
++// so send the whole pattern first.
++void tx_modulator_set_loop(bool loop) {
++    s_sym_loop_start = s_sym_tail;
++    s_sym_loop = loop;
++}
++
++bool tx_modulator_loop(void) {
++    return s_sym_loop;
 +}
 +
 +void tx_modulator_set_key(bool on) {
@@ -2943,10 +2980,10 @@ index 0000000..5820e74
 +#endif // MICROPY_HW_TX
 diff --git a/ports/rp2/tx/tx_modulator.h b/ports/rp2/tx/tx_modulator.h
 new file mode 100644
-index 0000000..792dd8a
+index 0000000..efc4c72
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.h
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,220 @@
 +/*
 + * tx_modulator.h
 + *
@@ -3048,6 +3085,11 @@ index 0000000..792dd8a
 +
 +// Number of symbols still queued for transmission.
 +uint32_t tx_modulator_symbol_pending(void);
++
++// Loop the queued symbols forever (FSK/OOK/PSK).  Call after writing the
++// pattern; the loop restarts at the first pending symbol.  false = one shot.
++void tx_modulator_set_loop(bool loop);
++bool tx_modulator_loop(void);
 +
 +// Manual key line for TX_MOD_CW: true = carrier on, false = RF off.
 +void tx_modulator_set_key(bool on);
