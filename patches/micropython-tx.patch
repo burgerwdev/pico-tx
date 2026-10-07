@@ -1635,10 +1635,10 @@ index 0000000..a58875f
 +#endif // _PICO_FRACTIONAL_PLL_H
 diff --git a/ports/rp2/tx/tx_modulator.c b/ports/rp2/tx/tx_modulator.c
 new file mode 100644
-index 0000000..db716e4
+index 0000000..dc271cf
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.c
-@@ -0,0 +1,1419 @@
+@@ -0,0 +1,1421 @@
 +/*
 + * tx_modulator.c
 + *
@@ -2269,9 +2269,7 @@ index 0000000..db716e4
 +    tx_modulator_enable_output(true);
 +    s_rf_key_applied = true;
 +    s_rf_gated = false;
-+    if (s_scheme == TX_MOD_FM) {
-+        s_audio_route_on = true;
-+    }
++    s_audio_route_on = (s_scheme == TX_MOD_FM);
 +}
 +
 +void tx_modulator_stop(void) {
@@ -2449,7 +2447,11 @@ index 0000000..db716e4
 +    s_ring_tail = 0;
 +    s_cur_sample = 0;
 +    tx_pwm_start();
-+    tx_modulator_enable_output(true);   // starting the FM route arms the output
++    // Starting the FM route (re)arms the output and clears any leftover
++    // keyed/gated state from a previous scheme (e.g. cw -> fm).
++    tx_modulator_enable_output(true);
++    s_rf_key_applied = true;
++    s_rf_gated = false;
 +    s_audio_route_on = true;
 +}
 +

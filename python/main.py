@@ -24,7 +24,7 @@ VERSION = "0.1.0"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
 # (release/firmware/picotx_firmware.uf2).  Shown by `ver`.
-FW_SHA256 = "6988b9d17aa44e99d6b5da99ad9335f896ba1a6ebfbb062c6eaaf5b37411d02c"
+FW_SHA256 = "ee5c02ca67d3bf92988c75685b9e4f941dbc379d41acc8edece618a8fa81f224"
 
 # Project links shown by the `ver` command.
 PROJECT_URL = "https://git.sr.ht/~bytewolf/rp2040-fm-transmitter"
