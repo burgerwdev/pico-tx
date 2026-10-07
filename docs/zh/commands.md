@@ -18,7 +18,6 @@
 | `refdiv <1\|2\|auto>` | PLL 参考分频（2 = PDM 步长减半；auto 为默认，停波频段自动保持 1） | `refdiv auto` |
 | `pin <21\|23\|24\|25>` | 切换 RF 输出引脚（保存并重启） | `pin 21` |
 | `pwr <2\|4\|8\|12>` | RF 驱动强度 mA（发射功率）；8/12 偶次谐波抑制更好 | `pwr 12` |
-| `rf on\|off` | RF 输出开关 | `rf on` |
 | `audio on\|off` | USB 音频→FM 路由开关 | `audio on` |
 | `vol <0-100>` | 音量百分比 | `vol 70` |
 | `mute on\|off` | 静音（≈vol 0；audio off ≠ mute） | `mute off` |

@@ -205,7 +205,6 @@ HELP_CATEGORIES = [
         ("trim <+/-Hz>", "frequency trim to null the crystal offset"),
         ("pin <21|23|24|25>", "RF output GPIO (save + reboot)"),
         ("pwr <2|4|8|12>", "RF drive strength in mA"),
-        ("rf on|off", "RF output on/off"),
         ("silence <auto|park|gate>", "silent-state behaviour"),
     ]),
     ("sound", "USB audio -> FM path (mode fm)", [
@@ -365,10 +364,6 @@ pwr <2|4|8|12> - RF output drive strength in mA (transmit power).
   even-order harmonic suppression); odd harmonics are inherent to the
   square wave and unchanged.  Use a real 50-ohm load to see the difference.
   Example: pwr 8""",
-    "rf": """\
-rf on|off - enable/disable the RF output.
-  Turning the output off silences the radio completely (no carrier).
-  Example: rf on""",
     "audio": """\
 audio on|off - start/stop the USB-audio -> FM routing.
   `audio off` silences the radio (carrier parks on fc) and is reported as
@@ -804,10 +799,10 @@ def show_status():
     print("PLL ready      : %s" % ("yes" if pico_tx.ready() else "NO"))
     # One unambiguous answer: is RF being emitted right now?
     keyed = pico_tx.mode() in ("fsk", "ook", "cw", "psk")
-    if not pico_tx.output_on():
-        tx_txt = "no - RF off (use 'rf on')"
-    elif not pico_tx.running():
+    if not pico_tx.running():
         tx_txt = "no - engine stopped (use 'tx on')"
+    elif not pico_tx.output_on():
+        tx_txt = "no - RF not armed"
     elif pico_tx.rf_gated():
         tx_txt = "no - keyed off now" + (" (no data queued)" if keyed and pico_tx.pending() == 0 else "")
     else:
@@ -1273,12 +1268,6 @@ def do_command(line, autolog=True):
             print("rebooting - settings saved to %s..." % CFG_FILE)
             time.sleep_ms(100)
             machine.reset()
-        elif cmd == "rf":
-            if arg not in ("on", "off"):
-                print("usage: rf on|off")
-            else:
-                pico_tx.enable_output(arg == "on")
-                print("RF output %s" % ("on" if pico_tx.output_on() else "off"))
         elif cmd == "audio":
             if arg not in ("on", "off"):
                 print("usage: audio on|off")

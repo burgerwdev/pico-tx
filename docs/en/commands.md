@@ -18,7 +18,6 @@ All values are in Hz unless noted. Type `help` in the console anytime.
 | `refdiv <1\|2\|auto>` | PLL reference divider (2 = half PDM step; auto is the default and keeps 1 on parked bands) | `refdiv auto` |
 | `pin <21\|23\|24\|25>` | Switch the RF output pin (saves and reboots) | `pin 21` |
 | `pwr <2\|4\|8\|12>` | RF drive strength in mA (transmit power); 8/12 give better even-harmonic suppression | `pwr 12` |
-| `rf on\|off` | RF output on/off | `rf on` |
 | `audio on\|off` | USB audio → FM routing on/off | `audio on` |
 | `vol <0-100>` | Volume in percent | `vol 70` |
 | `mute on\|off` | Mute (≈ vol 0; audio off ≠ mute) | `mute off` |
