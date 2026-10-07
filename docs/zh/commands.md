@@ -47,9 +47,9 @@
 | `mode [名称]` | 查看/选择发射方式：`fm` `tone` `fsk` `ook` `cw` `chirp` `psk` | `mode tone` |
 | `tx on\|off` | 启动/停止调制引擎（非 FM 方式） | `tx off` |
 | `tone <hz> [hz2] [level%]` | 内部 DDS 音调 FM 调制到载波；`tone off` 停止 | `tone 1000` |
-| `fsk <baud> <shift_hz> <hex>` | 排队 2-FSK 符号（`0`→-shift，`1`→+shift） | `fsk 1200 4500 55aa0f` |
-| `ook <baud> <hex>` | 排队开关键控符号（`0`→RF 关） | `ook 2000 aaaa` |
-| `psk <baud> <2\|4> <hex>` | 排队 BPSK（`2`）/ QPSK（`4`）符号 | `psk 2400 2 abcd` |
+| `fsk <baud> <shift_hz> <hex> [loop]` | 排队 2-FSK 符号（`0`→-shift，`1`→+shift）；末尾加 `loop` 循环 | `fsk 1200 4500 55aa0f loop` |
+| `ook <baud> <hex> [loop]` | 排队开关键控符号（`0`→RF 关） | `ook 2000 aaaa loop` |
+| `psk <baud> <2\|4> <hex> [loop]` | 排队 BPSK（`2`）/ QPSK（`4`）符号 | `psk 2400 2 abcd` |
 | `cw <文本>` | 在载波上发摩斯（20 wpm，阻塞） | `cw CQ CQ DE PICO TX` |
 | `chirp <f0> <f1> <ms> [gap] [repeat]` | 线性扫频；`chirp off` 停止 | `chirp 87900000 88100000 100 20 1` |
 | `service [命令...]` | 开机自动执行的一条控制台命令（无头运行）；`service off` 清除 | `service tone 1000` |

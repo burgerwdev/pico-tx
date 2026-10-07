@@ -48,9 +48,9 @@ data. Switching to a non-`fm` mode starts the modulation engine automatically.
 | `mode [name]` | Show or select the transmit scheme: `fm`,`tone`,`fsk`,`ook`,`cw`,`chirp`,`psk` | `mode tone` |
 | `tx on\|off` | Start/stop the modulation engine (non-FM schemes) | `tx off` |
 | `tone <hz> [hz2] [level%]` | Internal DDS tone(s) FM-modulated onto the carrier; `tone off` stops | `tone 1000` |
-| `fsk <baud> <shift_hz> <hex>` | Queue 2-FSK symbols (`0`→-shift, `1`→+shift) | `fsk 1200 4500 55aa0f` |
-| `ook <baud> <hex>` | Queue on/off keying symbols (`0`→RF off) | `ook 2000 aaaa` |
-| `psk <baud> <2\|4> <hex>` | Queue BPSK (`2`) / QPSK (`4`) symbols | `psk 2400 2 abcd` |
+| `fsk <baud> <shift_hz> <hex> [loop]` | Queue 2-FSK symbols (`0`→-shift, `1`→+shift); append `loop` to repeat | `fsk 1200 4500 55aa0f loop` |
+| `ook <baud> <hex> [loop]` | Queue on/off keying symbols (`0`→RF off) | `ook 2000 aaaa loop` |
+| `psk <baud> <2\|4> <hex> [loop]` | Queue BPSK (`2`) / QPSK (`4`) symbols | `psk 2400 2 abcd` |
 | `cw <text>` | Key `text` as Morse on the carrier (20 wpm, blocking) | `cw CQ CQ DE PICO TX` |
 | `chirp <f0> <f1> <ms> [gap] [repeat]` | Linear frequency sweep; `chirp off` stops | `chirp 87900000 88100000 100 20 1` |
 | `service [cmd...]` | Console command to run automatically at boot (headless); `service off` clears | `service tone 1000` |

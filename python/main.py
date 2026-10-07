@@ -221,7 +221,6 @@ pico-tx console - commands (values in Hz unless stated):
   pwr <2|4|8|12>       RF output drive strength in mA (12 = max, default)
   rf on|off            RF output on/off
   tx on|off            modulation engine on/off (non-FM schemes)
-  loop on|off          repeat the queued FSK/OOK/PSK symbols forever
   mode [name]          select transmit mode: fm|tone|fsk|ook|cw|chirp|psk
                          fm    = USB audio -> FM (default)
                          tone  = internal DDS tone(s) -> FM
@@ -231,9 +230,9 @@ pico-tx console - commands (values in Hz unless stated):
                          chirp = linear frequency sweep
                          psk   = BPSK/QPSK (constant envelope)
   tone <hz> [hz2] [lvl]  internal tone generator (lvl % 0-100) | tone off
-  fsk <baud> <shift> <hex>   send 2-FSK symbols (hex bytes)
-  ook <baud> <hex>           send on/off keying symbols
-  psk <baud> <2|4> <hex>     send BPSK/QPSK symbols
+  fsk <baud> <shift> <hex> [loop]   send 2-FSK symbols (append 'loop' to repeat)
+  ook <baud> <hex> [loop]           send on/off keying symbols
+  psk <baud> <2|4> <hex> [loop]     send BPSK/QPSK symbols
   cw <text>                  send Morse on the carrier (20 wpm)
   chirp <f0> <f1> <ms> [gap] [repeat]   linear sweep | chirp off
   service [cmd...]     command to run at boot (headless) | service off
@@ -1109,12 +1108,6 @@ def do_command(line):
                 else:
                     pico_tx.stop()
                 print("tx %s" % arg)
-        elif cmd == "loop":
-            if arg not in ("on", "off"):
-                print("usage: loop on|off  (repeat the queued FSK/OOK/PSK symbols forever)")
-            else:
-                pico_tx.set_loop(arg == "on")
-                print("symbol loop %s" % arg)
         elif cmd == "tone":
             if arg is None or arg == "off":
                 pico_tx.tone_stop()
@@ -1134,12 +1127,14 @@ def do_command(line):
                     print("usage: tone <hz> [hz2] [level%% 0-100]  |  tone off")
         elif cmd in ("fsk", "ook", "psk"):
             if arg is None or arg2 is None:
-                print("usage: %s <baud> %s <hex-symbols>"
+                print("usage: %s <baud> %s <hex-symbols> [loop]"
                       % (cmd, "<shift_hz>" if cmd == "fsk" else ("<order 2|4>" if cmd == "psk" else "")))
-                print("  e.g. fsk 1200 4500 55aa0f  |  ook 2000 aaaa  |  psk 2400 2 abcd")
+                print("  e.g. fsk 1200 4500 55aa0f  |  ook 2000 aaaa loop  |  psk 2400 2 abcd")
             else:
                 baud = parse_int(arg, "baud")
                 data = None
+                hex_idx = 2 if cmd == "ook" else 3
+                loop = len(parts) > hex_idx + 1 and parts[hex_idx + 1].lower() in ("loop", "rep", "repeat", "on")
                 if baud is None or baud <= 0:
                     data = None
                 elif cmd == "fsk":
@@ -1160,12 +1155,14 @@ def do_command(line):
                         MODE = "ook"
                         pico_tx.ook_config(baud)
                 if data is None:
-                    print("usage: %s <baud> ... <hex-symbols>" % cmd)
+                    print("usage: %s <baud> ... <hex-symbols> [loop]" % cmd)
                 else:
+                    pico_tx.set_loop(loop)
                     pico_tx.start()
                     n = pico_tx.send(data)
-                    print("%s %d baud: queued %d/%d symbols (%d pending)"
-                          % (cmd.upper(), baud, n, len(data), pico_tx.pending()))
+                    print("%s %d baud: queued %d/%d symbols (%d pending)%s"
+                          % (cmd.upper(), baud, n, len(data), pico_tx.pending(),
+                             " - looping" if loop else ""))
         elif cmd == "cw":
             text = " ".join(parts[1:])
             if not text:
