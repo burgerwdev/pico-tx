@@ -283,6 +283,13 @@ def build_help(what=None):
             for c, d in cmds:
                 out.append("  %-38s %s" % (c, d))
             return "\n".join(out)
+    # Not a category: look up a single command across all categories.
+    for key, title, cmds in HELP_CATEGORIES:
+        for c, d in cmds:
+            if c and c.split()[0].lower() == w:
+                return ("%s - %s\n  %s\n  (in category '%s'; 'help %s' lists the\n"
+                        "   category, 'help all' lists everything)"
+                        % (w, d, c, key, key))
     return None
 
 
@@ -478,6 +485,52 @@ reset - delete the saved config (%s) and reboot to defaults
 exit - stop the console and return to the MicroPython REPL.
   Example: exit""",
 }
+
+
+CMD_DETAILS.update({
+    "mode": """mode [fm|tone|fsk|ook|cw|chirp|psk] - select the transmit scheme.
+  fm    USB audio -> FM (default)
+  tone  internal DDS tone(s) -> FM
+  fsk   symbol stream -> carrier +/- shift
+  ook   symbol stream -> RF on/off
+  cw    Morse keyed onto the carrier (uses the symbol engine)
+  chirp linear frequency sweep
+  psk   BPSK/QPSK (constant envelope)
+  Switching clears any queued pattern and starts the engine.
+  Example: mode tone""",
+    "tx": """tx on|off - pause/resume the modulation engine.
+  tx off pauses and keeps the queued pattern/payload; tx on resumes it.
+  A new send command or 'mode' replaces the pattern.
+  Example: tx off""",
+    "tone": """tone <hz> [hz2] [level%] | tone off - internal DDS tone(s) -> FM.
+  hz/hz2 : tone frequency in Hz (0..20000); hz2 = 0 for a single tone.
+  level% : 0..100 (default 100 = full deviation).
+  Examples: tone 1000   tone 697 1209 50   tone off""",
+    "fsk": """fsk <baud> <shift_hz> <hex> [repeat [n]] - 2-FSK symbol stream.
+  baud>0; shift_hz is the fundamental +/- shift; '0'->-shift, '1'->+shift.
+  hex: bytes, 0x/space/comma allowed, odd length padded (e.g. 55aa0f).
+  repeat: absent = once, 'repeat'/'repeat 0' = forever, 'repeat n' = n times.
+  Example: fsk 1200 4500 55aa0f repeat 0""",
+    "ook": """ook <baud> <hex> [repeat [n]] - on/off keying symbol stream.
+  symbol 0 -> RF off, non-zero -> RF on.
+  Example: ook 2000 aa55 repeat 0""",
+    "psk": """psk <baud> <2|4> <hex> [repeat [n]] - BPSK (2) / QPSK (4).
+  Example: psk 2400 2 abcd""",
+    "cw": """cw <text> [repeat [n]] - Morse on the carrier (20 wpm).
+  The text is encoded to an on/off keying stream (dots/dashes) and sent by
+  the symbol engine, so repeat works and the console is never blocked.
+  Example: cw CQ CQ DE PICO TX repeat 0""",
+    "chirp": """chirp <f0> <f1> <ms> [gap_ms] [repeat] | chirp off - linear sweep.
+  f0/f1 absolute fundamental Hz (inside the PLL window); ms = sweep time.
+  repeat token: 1/on/yes/repeat.
+  Example: chirp 87900000 88100000 100 20 1""",
+    "service": """service [command...] | service off - run one console command at boot.
+  The boot service never opens the live log (safe for a headless beacon).
+  Example: service cw CQ DE PICO repeat 0""",
+    "log": """log - live transmit log (one line/s; Ctrl-C stops, 'log' resumes).
+  Auto-opened after cw/fsk/ook/psk/tone/chirp and after tx on/off.
+  Shows elapsed time, mode, carrier, RF state and mode-specific detail.""",
+})
 
 
 def parse_int(s, what):
@@ -1009,15 +1062,14 @@ def do_command(line, autolog=True):
             if arg is None:
                 print(build_help())
             else:
-                h = build_help(arg)
-                if h is not None:
-                    print(h)
+                key = arg2 if arg2 is not None else arg   # allow 'help <cat> <cmd>'
+                d = CMD_DETAILS.get(key.lower())
+                if d is None:
+                    d = build_help(key)                   # category or command
+                if d is None:
+                    print("no help for '%s' (try 'help' for the category index)" % key)
                 else:
-                    d = CMD_DETAILS.get(arg.lower())
-                    if d is None:
-                        print("no help for '%s' (try 'help' for the category index)" % arg)
-                    else:
-                        print(d)
+                    print(d)
         elif cmd == "ver":
             print("pico-tx v%s" % VERSION)
             print("Firmware sha256: %s" % FW_SHA256)
