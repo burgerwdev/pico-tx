@@ -2,7 +2,7 @@
 
 **版本 v0.1.0** —— RP2040 通用 RF 发射机
 
-中文 · [English](README.md) · 基于 [rp2040-fm-transmitter](https://git.sr.ht/~bytewolf/rp2040-fm-transmitter)
+中文 · [English](README.md) · [项目主页](https://git.sr.ht/~bytewolf/pico-tx) · 基于 [rp2040-fm-transmitter](https://git.sr.ht/~bytewolf/rp2040-fm-transmitter)
 
 把一片 Raspberry Pi Pico（RP2040）变成 **通用 RF 发射机**，基于
 [pico-fractional-pll](https://github.com/kaduhi/pico-fractional-pll) 技术
@@ -110,7 +110,7 @@ release/
 ## 从源码构建
 
 ```bash
-git clone <pico-tx-repo-url>
+git clone git@git.sr.ht:~bytewolf/pico-tx
 cd pico-tx
 ./build.sh            # 默认 MicroPython v1.29.0
 # 或 ./build.sh <tag/commit>

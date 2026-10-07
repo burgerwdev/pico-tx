@@ -27,7 +27,7 @@ VERSION = "0.1.0"          # console release version (see release README)
 FW_SHA256 = "3ec839705e1f758ad936dd52fa8856c5b36a710838c8e2641f2930445812edf1"
 
 # Project links shown by the `ver` command.
-PROJECT_URL = "https://git.sr.ht/~bytewolf/rp2040-fm-transmitter"
+PROJECT_URL = "https://git.sr.ht/~bytewolf/pico-tx"
 BILIBILI_URL = "https://space.bilibili.com/28447213"
 
 RF_PIN = 21                # GP21 = CLK_GPOUT0 (configurable: 21/23/24/25)

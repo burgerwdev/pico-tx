@@ -2,7 +2,7 @@
 
 **Version 0.1.0** — RP2040 general-purpose RF transmitter
 
-[中文](README.zh.md) · English · Based on [rp2040-fm-transmitter](https://git.sr.ht/~bytewolf/rp2040-fm-transmitter)
+[中文](README.zh.md) · English · [Project](https://git.sr.ht/~bytewolf/pico-tx) · based on [rp2040-fm-transmitter](https://git.sr.ht/~bytewolf/rp2040-fm-transmitter)
 
 Turn a Raspberry Pi Pico (RP2040) into a **general-purpose RF transmitter**
 built on the [pico-fractional-pll](https://github.com/kaduhi/pico-fractional-pll)
@@ -127,7 +127,7 @@ release/
 ## Build from source
 
 ```bash
-git clone <pico-tx-repo-url>
+git clone git@git.sr.ht:~bytewolf/pico-tx
 cd pico-tx
 ./build.sh            # default MicroPython v1.29.0
 # or ./build.sh <tag-or-commit>
