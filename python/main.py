@@ -221,7 +221,6 @@ pico-tx console - commands (values in Hz unless stated):
   pwr <2|4|8|12>       RF output drive strength in mA (12 = max, default)
   rf on|off            RF output on/off
   tx on|off            modulation engine on/off (non-FM schemes)
-  key on|off           hold the CW carrier on/off (key on = continuous carrier)
   mode [name]          select transmit mode: fm|tone|fsk|ook|cw|chirp|psk
                          fm    = USB audio -> FM (default)
                          tone  = internal DDS tone(s) -> FM
@@ -1109,16 +1108,6 @@ def do_command(line):
                 else:
                     pico_tx.stop()
                 print("tx %s" % arg)
-        elif cmd == "key":
-            if arg not in ("on", "off"):
-                print("usage: key on|off  (hold the CW carrier on/off; 'key on' =")
-                print("  continuous unmodulated carrier for measurements)")
-            else:
-                MODE = "cw"
-                pico_tx.set_mode("cw")
-                pico_tx.key(arg == "on")
-                pico_tx.start()
-                print("CW key %s" % arg)
         elif cmd == "tone":
             if arg is None or arg == "off":
                 pico_tx.tone_stop()
