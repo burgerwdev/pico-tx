@@ -60,12 +60,14 @@ PC (48 kHz stereo 16-bit PCM)
 | `tone` | DDS sine(s) → freq | internal (up to 2 tones) | 256-entry Q14 LUT, linear interpolation; test tone / CTCSS / DTMF |
 | `fsk` | freq = carrier ± shift | symbol FIFO | shift from `fsk_config`, `0`→-shift `1`→+shift |
 | `ook` | RF enable = bit | symbol FIFO | `0`→RF off |
-| `cw` | RF enable = key | `key(bool)` | Morse timing driven from Python (20 wpm) |
+| `cw` | RF enable = key | symbol FIFO | Morse encoded to OOK by Python (20 wpm) |
 | `chirp` | freq = linear ramp | internal | `f0..f1` over `duration_ms`, optional gap + repeat |
 | `psk` | freq = Δphase/tsym | symbol FIFO | order 2 (BPSK) / 4 (QPSK); phase lands on the constellation point |
 
-A shared symbol FIFO (256 entries) feeds FSK/OOK/PSK; the symbol clock is a
-counter in the ISR (`sps = 48000/baud`).  Because the PLL only accepts
+A shared symbol FIFO (1024 entries) feeds FSK/OOK/PSK; the symbol clock is a
+counter in the ISR (`sps = 48000/baud`).  When a pattern repeats, you can set
+a gap with `set_repeat_gap(ms)`.  The RF is keyed off during the gap, so a
+receiver can tell the passes apart.  Because the PLL only accepts
 frequency, the reachable modulation space is constant-envelope
 frequency/phase modulation plus on/off keying with a coarse (±2/4/8/12 mA)
 drive-strength amplitude - there is no linear AM/SSB path.

@@ -45,12 +45,12 @@ data. Switching to a non-`fm` mode starts the modulation engine automatically.
 | Command | Description | Example |
 |---|---|---|
 | `mode [name]` | Show or select the transmit scheme: `fm`,`tone`,`fsk`,`ook`,`cw`,`chirp`,`psk` | `mode tone` |
-| `tx on\|off` | Pause/resume the modulation engine (the queued pattern is kept; `tx on` resumes it) | `tx off` |
+| `tx on\|off\|pause` | `on` starts or continues the engine; `pause` keeps the position, so a later `tx on` continues at the same point; `off` moves the pattern back to its first symbol, so a later `tx on` starts again. In FM mode, `off` also disarms the RF output, but `pause` only parks the carrier | `tx pause` |
 | `tone <hz> [hz2] [level%]` | Internal DDS tone(s) FM-modulated onto the carrier; `tone off` stops | `tone 1000` |
-| `fsk <baud> <shift_hz> <hex> [repeat [n]]` | Queue 2-FSK symbols (`0`→-shift, `1`→+shift) | `fsk 1200 4500 55aa0f repeat 0` |
-| `ook <baud> <hex> [repeat [n]]` | Queue on/off keying symbols (`0`→RF off) | `ook 2000 aaaa repeat 0` |
-| `psk <baud> <2\|4> <hex> [repeat [n]]` | Queue BPSK (`2`) / QPSK (`4`) symbols | `psk 2400 2 abcd` |
-| `cw <text> [repeat [n]]` | Send `text` as Morse on the carrier (20 wpm) | `cw CQ CQ DE PICO TX repeat 0` |
+| `fsk <baud> <shift_hz> <hex> [repeat [n]] [gap ms]` | Queue 2-FSK symbols (`0`→-shift, `1`→+shift) | `fsk 1200 4500 55aa0f repeat 0 gap 500` |
+| `ook <baud> <hex> [repeat [n]] [gap ms]` | Queue on/off keying symbols (`0`→RF off) | `ook 2000 aaaa repeat 0` |
+| `psk <baud> <2\|4> <hex> [repeat [n]] [gap ms]` | Queue BPSK (`2`) / QPSK (`4`) symbols | `psk 2400 2 abcd` |
+| `cw <text> [repeat [n]] [gap ms]` | Send `text` as Morse on the carrier (20 wpm) | `cw CQ CQ DE PICO TX repeat 0 gap 800` |
 | `chirp <f0> <f1> <ms> [gap] [repeat]` | Linear frequency sweep; `chirp off` stops | `chirp 87900000 88100000 100 20 1` |
 | `service [cmd...]` | Console command to run automatically at boot (headless); `service off` clears | `service tone 1000` |
 | `log` | Live transmit log (one line/s; Ctrl-C stops, `log` resumes). Auto-started after `cw`/`fsk`/`ook`/`psk`/`tone`/`chirp` | `log` |
@@ -58,10 +58,18 @@ data. Switching to a non-`fm` mode starts the modulation engine automatically.
 Sending auto-starts the modulation engine and then opens the `log`; press
 Ctrl-C to get the prompt back (the transmission keeps running in firmware).
 
-`repeat [n]`: no `repeat` = send once; `repeat` or `repeat 0` = repeat
-forever; `repeat n` = n passes total.  The repeat runs in firmware, so the
-console stays responsive - `tx off` pauses it (and `tx on` resumes).  A new
-send or `mode` replaces the pattern.
+`repeat [n]`: no `repeat` sends the pattern one time. `repeat` or `repeat 0`
+repeats it without an end. `repeat n` sends n passes in total. The repeat
+runs in firmware, so the console stays responsive. `tx pause` holds the
+pattern and `tx on` continues it. `tx off` moves the pattern back to its first
+symbol and `tx on` starts it again. A new send command or `mode` replaces the
+pattern.
+
+`gap <ms>`: Silence between repeat passes. The RF is keyed off for this
+interval, so a receiver can tell the passes apart. The gap applies only with a
+repeat. If you do not set a gap, the default depends on the mode: one word gap
+(about 7 symbol periods) for `cw` and `ook`, 250 ms for `fsk` and `psk`.
+`gap 0` disables the gap.
 
 Notes:
 - `fsk`/`ook`/`psk`/`cw` share a 1024-symbol firmware FIFO; symbols beyond

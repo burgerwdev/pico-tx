@@ -44,12 +44,12 @@
 | 命令 | 说明 | 示例 |
 |---|---|---|
 | `mode [名称]` | 查看/选择发射方式：`fm` `tone` `fsk` `ook` `cw` `chirp` `psk` | `mode tone` |
-| `tx on\|off` | 暂停/继续调制引擎（保留已排队的图案，`tx on` 继续发） | `tx off` |
+| `tx on\|off\|pause` | `on` 启动/继续；`pause` 保留位置，再次 `tx on` 从原处继续；`off` 回退到开头，再次 `tx on` 重新发射。FM 模式下 `off` 还会关断 RF，`pause` 只停靠载波 | `tx pause` |
 | `tone <hz> [hz2] [level%]` | 内部 DDS 音调 FM 调制到载波；`tone off` 停止 | `tone 1000` |
-| `fsk <baud> <shift_hz> <hex> [repeat [n]]` | 排队 2-FSK 符号（`0`→-shift，`1`→+shift） | `fsk 1200 4500 55aa0f repeat 0` |
-| `ook <baud> <hex> [repeat [n]]` | 排队开关键控符号（`0`→RF 关） | `ook 2000 aaaa repeat 0` |
-| `psk <baud> <2\|4> <hex> [repeat [n]]` | 排队 BPSK（`2`）/ QPSK（`4`）符号 | `psk 2400 2 abcd` |
-| `cw <文本> [repeat [n]]` | 在载波上发摩斯（20 wpm） | `cw CQ CQ DE PICO TX repeat 0` |
+| `fsk <baud> <shift_hz> <hex> [repeat [n]] [gap ms]` | 排队 2-FSK 符号（`0`→-shift，`1`→+shift） | `fsk 1200 4500 55aa0f repeat 0 gap 500` |
+| `ook <baud> <hex> [repeat [n]] [gap ms]` | 排队开关键控符号（`0`→RF 关） | `ook 2000 aaaa repeat 0` |
+| `psk <baud> <2\|4> <hex> [repeat [n]] [gap ms]` | 排队 BPSK（`2`）/ QPSK（`4`）符号 | `psk 2400 2 abcd` |
+| `cw <文本> [repeat [n]] [gap ms]` | 在载波上发摩斯（20 wpm） | `cw CQ CQ DE PICO TX repeat 0 gap 800` |
 | `chirp <f0> <f1> <ms> [gap] [repeat]` | 线性扫频；`chirp off` 停止 | `chirp 87900000 88100000 100 20 1` |
 | `service [命令...]` | 开机自动执行的一条控制台命令（无头运行）；`service off` 清除 | `service tone 1000` |
 | `log` | 实时发射日志（每秒一行；Ctrl-C 停，`log` 恢复）。`cw`/`fsk`/`ook`/`psk`/`tone`/`chirp` 发完后自动打开 | `log` |
@@ -57,7 +57,12 @@
 发送命令会自动启动调制引擎，然后打开 `log`；按 Ctrl-C 回到提示符（发射仍在固件里继续）。
 
 `repeat [n]`：不加 = 发一次；`repeat` 或 `repeat 0` = 无限循环；`repeat n` = 共发 n 遍。
-循环在固件里跑，控制台不阻塞——`tx off` 暂停（`tx on` 继续）；新的发送命令或 `mode` 会替换图案。
+循环在固件里跑，控制台不阻塞——`tx pause` 暂停（`tx on` 继续），`tx off` 回退（`tx on` 重新发射）；
+新的发送命令或 `mode` 会替换图案。
+
+`gap <ms>`：两次 repeat 之间插入的静默间隔（这段时间 RF 键控关断），方便收信机分辨。
+仅在重复时生效；不写时按模式取默认值：`cw`/`ook` 为一个词间隔（约 7 个码元），
+`fsk`/`psk` 为 250ms。`gap 0` 关闭间隔。
 
 说明：
 - `fsk`/`ook`/`psk`/`cw` 共用固件内 1024 符号 FIFO，超出部分会被拒绝（`send` 返回实际接受的数量）。`baud` 要配合 PLL 环路带宽（宽带 FM 下几 kbaud 量级）。

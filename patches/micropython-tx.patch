@@ -199,10 +199,10 @@ index 0000000..1cdd102
 +target_link_libraries(usermod INTERFACE usermod_pico_tx)
 diff --git a/ports/rp2/tx/modpico_tx.c b/ports/rp2/tx/modpico_tx.c
 new file mode 100644
-index 0000000..bbb1ec0
+index 0000000..6089350
 --- /dev/null
 +++ b/ports/rp2/tx/modpico_tx.c
-@@ -0,0 +1,789 @@
+@@ -0,0 +1,822 @@
 +/*
 + * modpico_tx.c
 + *
@@ -781,6 +781,16 @@ index 0000000..bbb1ec0
 +}
 +static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_start_obj, mod_pico_tx_start);
 +
++// pico_tx.pause() - stop the engine, but keep the position. A later
++// pico_tx.start() call continues at the same point.
++static mp_obj_t mod_pico_tx_pause(void) {
++    tx_modulator_pause();
++    return mp_const_none;
++}
++static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_pause_obj, mod_pico_tx_pause);
++
++// pico_tx.stop() - stop the engine, disarm the RF, and move the pattern back
++// to its first symbol. A later pico_tx.start() call starts the pattern again.
 +static mp_obj_t mod_pico_tx_stop(void) {
 +    tx_modulator_stop();
 +    return mp_const_none;
@@ -856,6 +866,25 @@ index 0000000..bbb1ec0
 +    return mp_obj_new_int_from_uint(tx_modulator_repeat());
 +}
 +static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_repeat_obj, mod_pico_tx_repeat);
++
++// pico_tx.set_repeat_gap(ms) / pico_tx.repeat_gap() - silence between passes,
++// in milliseconds.
++static mp_obj_t mod_pico_tx_set_repeat_gap(mp_obj_t ms_obj) {
++    tx_modulator_set_repeat_gap((uint32_t)mp_obj_get_int(ms_obj));
++    return mp_const_none;
++}
++static MP_DEFINE_CONST_FUN_OBJ_1(mod_pico_tx_set_repeat_gap_obj, mod_pico_tx_set_repeat_gap);
++
++static mp_obj_t mod_pico_tx_repeat_gap(void) {
++    return mp_obj_new_int_from_uint(tx_modulator_repeat_gap());
++}
++static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_repeat_gap_obj, mod_pico_tx_repeat_gap);
++
++// pico_tx.current_symbol() -> the last symbol byte that the engine loaded.
++static mp_obj_t mod_pico_tx_current_symbol(void) {
++    return mp_obj_new_int_from_uint(tx_modulator_current_symbol());
++}
++static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_current_symbol_obj, mod_pico_tx_current_symbol);
 +
 +// pico_tx.clear_symbols() - drop the queued pattern / break a running loop.
 +static mp_obj_t mod_pico_tx_clear_symbols(void) {
@@ -965,6 +994,7 @@ index 0000000..bbb1ec0
 +    { MP_ROM_QSTR(MP_QSTR_running), MP_ROM_PTR(&mod_pico_tx_running_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_output_on), MP_ROM_PTR(&mod_pico_tx_output_on_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_start), MP_ROM_PTR(&mod_pico_tx_start_obj) },
++    { MP_ROM_QSTR(MP_QSTR_pause), MP_ROM_PTR(&mod_pico_tx_pause_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_stop), MP_ROM_PTR(&mod_pico_tx_stop_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_tone), MP_ROM_PTR(&mod_pico_tx_tone_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_tone_stop), MP_ROM_PTR(&mod_pico_tx_tone_stop_obj) },
@@ -977,6 +1007,9 @@ index 0000000..bbb1ec0
 +    { MP_ROM_QSTR(MP_QSTR_pending), MP_ROM_PTR(&mod_pico_tx_pending_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_set_repeat), MP_ROM_PTR(&mod_pico_tx_set_repeat_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_repeat), MP_ROM_PTR(&mod_pico_tx_repeat_obj) },
++    { MP_ROM_QSTR(MP_QSTR_set_repeat_gap), MP_ROM_PTR(&mod_pico_tx_set_repeat_gap_obj) },
++    { MP_ROM_QSTR(MP_QSTR_repeat_gap), MP_ROM_PTR(&mod_pico_tx_repeat_gap_obj) },
++    { MP_ROM_QSTR(MP_QSTR_current_symbol), MP_ROM_PTR(&mod_pico_tx_current_symbol_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_clear_symbols), MP_ROM_PTR(&mod_pico_tx_clear_symbols_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_set_symbol_rate), MP_ROM_PTR(&mod_pico_tx_set_symbol_rate_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_key), MP_ROM_PTR(&mod_pico_tx_key_obj) },
@@ -1635,10 +1668,10 @@ index 0000000..a58875f
 +#endif // _PICO_FRACTIONAL_PLL_H
 diff --git a/ports/rp2/tx/tx_modulator.c b/ports/rp2/tx/tx_modulator.c
 new file mode 100644
-index 0000000..37984b5
+index 0000000..47055d6
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.c
-@@ -0,0 +1,1423 @@
+@@ -0,0 +1,1517 @@
 +/*
 + * tx_modulator.c
 + *
@@ -1900,7 +1933,12 @@ index 0000000..37984b5
 +static volatile uint16_t s_sym_loop_start; // FIFO index where the pattern restarts
 +static volatile uint32_t s_repeat;        // total passes: 0 = forever, N = N times
 +static volatile uint32_t s_passes_done;   // completed passes of the pattern
++static volatile bool s_repeat_done;       // true after the last pass ends
 +static volatile uint32_t s_sym_sent;      // symbols actually consumed
++static volatile uint8_t s_sym_current;    // the last symbol that the engine loaded
++static volatile uint32_t s_repeat_gap;    // silence between passes, in samples
++static volatile uint32_t s_gap_left;      // samples that are left in the gap
++static volatile bool s_restart_pending;   // true when the gap is complete
 +
 +// --- linear chirp (TX_MOD_CHIRP) ---
 +static volatile uint32_t s_chirp_f0, s_chirp_f1;
@@ -1914,20 +1952,39 @@ index 0000000..37984b5
 +// the PSK phase step is affordable.
 +static void __not_in_flash_func(tx_symbol_load)(void) {
 +    uint16_t tail = s_sym_tail;
-+    // Repeat handling: when the FIFO drains, restart at the first queued
-+    // symbol.  s_repeat == 0 repeats forever; otherwise the pattern is sent
-+    // s_repeat times total, after which the FIFO idles (transmits 0).
-+    if (tail == s_sym_head && s_sym_loop_start != s_sym_head) {
++    if (s_restart_pending) {
++        // The gap is complete. Start the pattern again at its first symbol.
++        s_restart_pending = false;
++        s_sym_tail = s_sym_loop_start;
++        tail = s_sym_loop_start;
++    } else if (tail == s_sym_head && s_sym_loop_start != s_sym_head && !s_repeat_done) {
++        // If the FIFO is empty, start again at the first symbol.
++        // s_repeat == 0: the pattern repeats without an end.
++        // Other values: the pattern repeats s_repeat times. After that, the
++        // FIFO is idle and sends 0.
++        bool again = false;
 +        if (s_repeat == 0) {
-+            tail = s_sym_loop_start;
-+            s_sym_tail = tail;
++            again = true;
 +        } else if (s_passes_done + 1 < s_repeat) {
 +            s_passes_done++;
-+            tail = s_sym_loop_start;
-+            s_sym_tail = tail;
++            again = true;
 +        } else {
 +            s_passes_done++;
-+            s_sym_loop_start = s_sym_head; // done: stop repeating
++            s_repeat_done = true; // the last pass is complete
++        }
++        if (again) {
++            if (s_repeat_gap) {
++                // Key the RF off for the gap. Then the receiver can tell the
++                // passes apart.
++                s_gap_left = s_repeat_gap;
++                s_restart_pending = true;
++                s_sym_freq = 0;
++                s_rf_key = false;
++                s_sym_current = 0;
++                return;
++            }
++            tail = s_sym_loop_start;
++            s_sym_tail = tail;
 +        }
 +    }
 +    uint8_t sym = 0;
@@ -1935,6 +1992,7 @@ index 0000000..37984b5
 +        sym = s_sym_fifo[tail];
 +        s_sym_tail = (uint16_t)((tail + 1) & TX_SYM_FIFO_MASK);
 +    }
++    s_sym_current = sym;
 +    // An empty FIFO transmits 0 (FSK: -shift; OOK/CW: RF off; PSK: phase 0).
 +    if (s_scheme == TX_MOD_FSK) {
 +        s_sym_freq = (sym & 1) ? (int32_t)s_fsk_shift : -(int32_t)s_fsk_shift;
@@ -2042,10 +2100,24 @@ index 0000000..37984b5
 +    case TX_MOD_OOK:
 +    case TX_MOD_CW:
 +    case TX_MOD_PSK: {
++        if (s_gap_left) {
++            // Gap between passes: key the RF off. The receiver sees a break.
++            s_gap_left--;
++            key_scheme = true;
++            keyed = false;
++            break;
++        }
 +        if (s_sym_countdown == 0) {
 +            tx_symbol_load();
 +            s_sym_countdown = s_sps ? s_sps : 1;
 +            s_sym_sent++;
++            if (s_gap_left) {
++                // The gap started at this tick. Key the RF off now.
++                s_gap_left--;
++                key_scheme = true;
++                keyed = false;
++                break;
++            }
 +        }
 +        s_sym_countdown--;
 +        if (s_scheme == TX_MOD_OOK || s_scheme == TX_MOD_CW) {
@@ -2191,7 +2263,12 @@ index 0000000..37984b5
 +    s_sym_loop_start = 0;
 +    s_repeat = 1;
 +    s_passes_done = 0;
++    s_repeat_done = false;
 +    s_sym_sent = 0;
++    s_sym_current = 0;
++    s_repeat_gap = 0;
++    s_gap_left = 0;
++    s_restart_pending = false;
 +    s_chirp_f0 = 0;
 +    s_chirp_f1 = 0;
 +    s_chirp_dur = 0;
@@ -2274,7 +2351,12 @@ index 0000000..37984b5
 +    s_audio_route_on = (s_scheme == TX_MOD_FM);
 +}
 +
-+void tx_modulator_stop(void) {
++// Pause the engine. Stop the sample ISR, but keep the FIFO position, the
++// repeat counters, and the ring buffer. A later tx_modulator_start() call
++// continues at the same point.
++// Broadcast FM parks the carrier on fc, and the radio is quiet. Every other
++// scheme keys the RF off.
++void tx_modulator_pause(void) {
 +    tx_pwm_stop();
 +    if (s_scheme == TX_MOD_FM && !s_gate_silent) {
 +        // Broadcast FM: park on the exact carrier (radio outputs silence).
@@ -2286,6 +2368,30 @@ index 0000000..37984b5
 +        s_rf_gated = true;
 +    }
 +    s_audio_route_on = false;
++}
++
++// Stop the engine. This function is the same as tx_modulator_pause(), but it
++// also disarms the RF output for all schemes, FM included. It also moves the
++// pattern back to its first symbol. A later tx_modulator_start() call starts
++// the pattern again.
++void tx_modulator_stop(void) {
++    tx_pwm_stop();
++    tx_modulator_enable_output(false);
++    pico_fractional_pll_set_freq_u32(s_carrier_hz);
++    s_rf_gated = true;
++    s_last_freq = s_carrier_hz;
++    s_audio_route_on = false;
++    uint32_t irq = save_and_disable_interrupts();
++    s_sym_tail = s_sym_loop_start;
++    s_passes_done = 0;
++    s_repeat_done = false;
++    s_sym_countdown = 1;
++    s_sym_current = 0;
++    s_gap_left = 0;
++    s_restart_pending = false;
++    s_rf_key = false;
++    s_sym_freq = 0;
++    restore_interrupts(irq);
 +}
 +
 +// ---------------------------------------------------------------------------
@@ -2385,10 +2491,27 @@ index 0000000..37984b5
 +    s_sym_loop_start = s_sym_tail;
 +    s_repeat = n;
 +    s_passes_done = 0;
++    s_repeat_done = false;
++    s_gap_left = 0;
++    s_restart_pending = false;
 +}
 +
 +uint32_t tx_modulator_repeat(void) {
 +    return s_repeat;
++}
++
++// Set the silence between repeat passes, in milliseconds. 0 = no gap.
++void tx_modulator_set_repeat_gap(uint32_t ms) {
++    s_repeat_gap = (uint32_t)(((uint64_t)ms * 48000u) / 1000u);
++}
++
++uint32_t tx_modulator_repeat_gap(void) {
++    return (uint32_t)(((uint64_t)s_repeat_gap * 1000u) / 48000u);
++}
++
++// Get the last symbol byte that the engine loaded. The log uses it.
++uint8_t tx_modulator_current_symbol(void) {
++    return s_sym_current;
 +}
 +
 +// Drop any queued/looping pattern and stop repeating.  Safe to call while the
@@ -2401,7 +2524,11 @@ index 0000000..37984b5
 +    s_sym_loop_start = 0;
 +    s_repeat = 1;
 +    s_passes_done = 0;
++    s_repeat_done = false;
 +    s_sym_countdown = 1;
++    s_sym_current = 0;
++    s_gap_left = 0;
++    s_restart_pending = false;
 +    s_rf_key = false;
 +    restore_interrupts(irq);
 +}
@@ -3064,10 +3191,10 @@ index 0000000..37984b5
 +#endif // MICROPY_HW_TX
 diff --git a/ports/rp2/tx/tx_modulator.h b/ports/rp2/tx/tx_modulator.h
 new file mode 100644
-index 0000000..49ed731
+index 0000000..11b48a7
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.h
-@@ -0,0 +1,230 @@
+@@ -0,0 +1,246 @@
 +/*
 + * tx_modulator.h
 + *
@@ -3144,9 +3271,18 @@ index 0000000..49ed731
 +void tx_modulator_enable_output(bool on);
 +bool tx_modulator_output_on(void);
 +
-+// Start/stop the 48 kHz sample-clock interrupt (the modulation engine).
-+// FM also requires the host to have selected a non-zero alternate setting.
++// Start the 48 kHz sample-clock interrupt (the modulation engine). For FM,
++// the host must also select a non-zero alternate setting.
 +void tx_modulator_start(void);
++
++// Pause the engine. Stop the ISR, but keep the FIFO position, the repeat
++// counters, and the ring buffer. A later start() call continues at the same
++// point.
++void tx_modulator_pause(void);
++
++// Stop the engine. This function is the same as pause(), but it also disarms
++// the RF output and moves the pattern back to its first symbol. A later
++// start() call starts the pattern again.
 +void tx_modulator_stop(void);
 +
 +// Start/stop the 48 kHz sample-clock interrupt that drives the modulation.
@@ -3181,6 +3317,13 @@ index 0000000..49ed731
 +// The repeat restarts at the first symbol queued when this is called.
 +void tx_modulator_set_repeat(uint32_t n);
 +uint32_t tx_modulator_repeat(void);
++
++// Set the silence between repeat passes, in milliseconds. 0 = no gap.
++void tx_modulator_set_repeat_gap(uint32_t ms);
++uint32_t tx_modulator_repeat_gap(void);
++
++// Get the last symbol byte that the engine loaded (FSK, OOK, CW, PSK).
++uint8_t tx_modulator_current_symbol(void);
 +
 +// Drop any queued/looping pattern and stop repeating (breaks a running loop).
 +void tx_modulator_clear_symbols(void);

@@ -20,11 +20,11 @@ import time
 
 import pico_tx
 
-VERSION = "0.1.1"          # console release version (see release README)
+VERSION = "0.1.2"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
 # (release/firmware/picotx_firmware.uf2).  Shown by `ver`.
-FW_SHA256 = "3ec839705e1f758ad936dd52fa8856c5b36a710838c8e2641f2930445812edf1"
+FW_SHA256 = "94f62c10920a0f6ff982a5b95082b6b4d9383cc1363f751ebe11b61f49add4a0"
 
 # Project links shown by the `ver` command.
 PROJECT_URL = "https://git.sr.ht/~bytewolf/pico-tx"
@@ -216,14 +216,15 @@ HELP_CATEGORIES = [
     ]),
     ("modes", "transmit modes and symbol senders", [
         ("mode <fm|tone|fsk|ook|cw|chirp|psk>", "select the transmit scheme"),
-        ("tx on|off", "pause/resume the engine (keeps the pattern)"),
+        ("tx on|off|pause", "on continues; off restarts; pause keeps the position"),
         ("tone <hz> [hz2] [lvl%]", "internal DDS tone(s) -> FM | tone off"),
-        ("fsk <baud> <shift> <hex> [repeat [n]]", "2-FSK symbols"),
-        ("ook <baud> <hex> [repeat [n]]", "on/off keying symbols"),
-        ("psk <baud> <2|4> <hex> [repeat [n]]", "BPSK/QPSK symbols"),
-        ("cw <text> [repeat [n]]", "Morse on the carrier (20 wpm)"),
+        ("fsk <baud> <shift> <hex> [repeat [n]] [gap ms]", "2-FSK symbols"),
+        ("ook <baud> <hex> [repeat [n]] [gap ms]", "on/off keying symbols"),
+        ("psk <baud> <2|4> <hex> [repeat [n]] [gap ms]", "BPSK/QPSK symbols"),
+        ("cw <text> [repeat [n]] [gap ms]", "Morse on the carrier (20 wpm)"),
         ("chirp <f0> <f1> <ms> [gap] [repeat]", "linear sweep | chirp off"),
         ("", "repeat: absent = once, 0 = forever, n = n times"),
+        ("", "gap: silence between repeats, in ms (default depends on mode)"),
     ]),
     ("tuning", "PLL tuning", [
         ("refdiv <1|2|auto>", "PLL reference divider (save + reboot)"),
@@ -493,28 +494,39 @@ CMD_DETAILS.update({
   psk   BPSK/QPSK (constant envelope)
   Switching clears any queued pattern and starts the engine.
   Example: mode tone""",
-    "tx": """tx on|off - pause/resume the modulation engine.
-  tx off pauses and keeps the queued pattern/payload; tx on resumes it.
+    "tx": """tx on|off|pause - control the modulation engine.
+  tx on     Start the engine, or continue it.
+  tx pause  Pause the engine. A later tx on continues at the same point.
+  tx off    Stop the engine and move the pattern back to its first symbol.
+            A later tx on starts the pattern again.
+            In FM mode, tx off also disarms the RF output. tx pause only
+            parks the carrier on fc.
   A new send command or 'mode' replaces the pattern.
-  Example: tx off""",
+  Example: tx pause""",
     "tone": """tone <hz> [hz2] [level%] | tone off - internal DDS tone(s) -> FM.
   hz/hz2 : tone frequency in Hz (0..20000); hz2 = 0 for a single tone.
   level% : 0..100 (default 100 = full deviation).
   Examples: tone 1000   tone 697 1209 50   tone off""",
-    "fsk": """fsk <baud> <shift_hz> <hex> [repeat [n]] - 2-FSK symbol stream.
+    "fsk": """fsk <baud> <shift_hz> <hex> [repeat [n]] [gap ms] - 2-FSK stream.
   baud>0; shift_hz is the fundamental +/- shift; '0'->-shift, '1'->+shift.
   hex: bytes, 0x/space/comma allowed, odd length padded (e.g. 55aa0f).
   repeat: absent = once, 'repeat'/'repeat 0' = forever, 'repeat n' = n times.
-  Example: fsk 1200 4500 55aa0f repeat 0""",
-    "ook": """ook <baud> <hex> [repeat [n]] - on/off keying symbol stream.
+  gap: silence between repeats, in milliseconds. Default: 250.
+  Example: fsk 1200 4500 55aa0f repeat 0 gap 500""",
+    "ook": """ook <baud> <hex> [repeat [n]] [gap ms] - on/off keying stream.
   symbol 0 -> RF off, non-zero -> RF on.
-  Example: ook 2000 aa55 repeat 0""",
-    "psk": """psk <baud> <2|4> <hex> [repeat [n]] - BPSK (2) / QPSK (4).
-  Example: psk 2400 2 abcd""",
-    "cw": """cw <text> [repeat [n]] - Morse on the carrier (20 wpm).
+  gap: silence between repeats, in milliseconds. Default: one word gap,
+  about 7 symbol periods.
+  Example: ook 2000 aa55 repeat 0 gap 200""",
+    "psk": """psk <baud> <2|4> <hex> [repeat [n]] [gap ms] - BPSK (2) / QPSK (4).
+  gap: silence between repeats, in milliseconds. Default: 250.
+  Example: psk 2400 2 abcd repeat 0 gap 500""",
+    "cw": """cw <text> [repeat [n]] [gap ms] - Morse on the carrier (20 wpm).
   The text is encoded to an on/off keying stream (dots/dashes) and sent by
   the symbol engine, so repeat works and the console is never blocked.
-  Example: cw CQ CQ DE PICO TX repeat 0""",
+  gap: silence between repeats, in milliseconds. Default: one word gap,
+  about 7 symbol periods.
+  Example: cw CQ CQ DE PICO TX repeat 0 gap 800""",
     "chirp": """chirp <f0> <f1> <ms> [gap_ms] [repeat] | chirp off - linear sweep.
   f0/f1 absolute fundamental Hz (inside the PLL window); ms = sweep time.
   repeat token: 1/on/yes/repeat.
@@ -523,7 +535,7 @@ CMD_DETAILS.update({
   The boot service never opens the live log (safe for a headless beacon).
   Example: service cw CQ DE PICO repeat 0""",
     "log": """log - live transmit log (one line/s; Ctrl-C stops, 'log' resumes).
-  Auto-opened after cw/fsk/ook/psk/tone/chirp and after tx on/off.
+  Auto-opened after cw/fsk/ook/psk/tone/chirp.
   Shows elapsed time, mode, carrier, RF state and mode-specific detail.""",
 })
 
@@ -596,20 +608,45 @@ def hex_str(data, limit=48):
     return h if len(h) <= limit else h[:limit] + ".."
 
 
+def sym_char(b):
+    """Convert one symbol byte to text for the log. A printable ASCII byte
+    becomes its character. Any other byte becomes \\xNN."""
+    if 32 <= b < 127:
+        return chr(b)
+    return "\\x%02x" % b
+
+
+def default_gap_ms(cmd, baud):
+    """Return the default repeat gap in milliseconds. The command can set
+    its own value. CW and OOK use one word gap, about 7 symbol periods.
+    FSK and PSK use 250 ms."""
+    if cmd in ("cw", "ook"):
+        return max(1, (7000 + baud // 2) // baud)
+    return 250
+
+
 def parse_repeat(parts):
-    """Pop a trailing 'repeat [n]' from a token list.  Returns (n, toks):
-    n = 1 (no repeat), 0 (forever), or the given count; toks has the tokens
-    with the repeat clause removed."""
+    """Remove a trailing 'gap <ms>' clause and a 'repeat [n]' clause from a
+    token list. Return (n, gap_ms, toks). n is 1 for no repeat, 0 for an
+    endless repeat, or the number of passes. gap_ms is None (use the default)
+    or the value in milliseconds. toks holds the remaining tokens."""
     toks = list(parts)
+    gap = None
+    if len(toks) >= 2 and toks[-2].lower() == "gap":
+        gap = parse_int(toks[-1], "gap ms")
+        if gap is None or gap < 0:
+            print("gap must be a non-negative number of milliseconds")
+            return None, None, toks
+        toks = toks[:-2]
     if toks and toks[-1].lower() == "repeat":
-        return 0, toks[:-1]
+        return 0, gap, toks[:-1]
     if len(toks) >= 2 and toks[-2].lower() == "repeat":
         n = parse_int(toks[-1], "repeat count")
         if n is None or n < 0:
             print("repeat count must be 0 (forever) or a positive number")
-            return None, toks
-        return n, toks[:-2]
-    return 1, toks
+            return None, None, toks
+        return n, gap, toks[:-2]
+    return 1, gap, toks
 
 
 def load_cfg():
@@ -930,9 +967,11 @@ def show_log():
                     ("%dHz" % pico_tx.tone_hz()) if pico_tx.tone_on() else "off", isr)
             elif mode in ("fsk", "ook", "psk", "cw"):
                 rep = pico_tx.repeat()
-                detail = "sym=%4d repeat=%-7s isr=%d/s" % (
-                    pico_tx.pending(),
-                    "forever" if rep == 0 else ("x%d" % rep), isr)
+                gap = pico_tx.repeat_gap()
+                detail = "sym=%-4s repeat=%-7s gap=%-5s isr=%d/s" % (
+                    sym_char(pico_tx.current_symbol()),
+                    "forever" if rep == 0 else ("x%d" % rep),
+                    "%dms" % gap if gap else "-", isr)
             elif mode == "chirp":
                 f0, f1, ms = LAST_CHIRP
                 detail = "%.3f->%.3f MHz %dms isr=%d/s" % (
@@ -1294,19 +1333,24 @@ def do_command(line, autolog=True):
             else:
                 print("usage: mode <fm|tone|fsk|ook|cw|chirp|psk>")
         elif cmd == "tx":
-            if arg not in ("on", "off"):
-                print("usage: tx on|off  (pause/resume; the queued pattern is kept)")
+            if arg not in ("on", "off", "pause"):
+                print("usage: tx on|off|pause  (on continues; off restarts; pause keeps the position)")
+            elif arg == "on":
+                pico_tx.start()
+                extra = " - continued, %d symbols left" % pico_tx.pending() if pico_tx.pending() else ""
+                print("tx on%s" % extra)
+            elif arg == "pause":
+                # Pause the engine. Keep the pattern and the position. A later
+                # 'tx on' continues at the same point.
+                pico_tx.pause()
+                extra = " - paused, %d symbols left" % pico_tx.pending() if pico_tx.pending() else ""
+                print("tx pause%s" % extra)
             else:
-                if arg == "on":
-                    pico_tx.start()
-                    extra = " - resumed, %d symbols left" % pico_tx.pending() if pico_tx.pending() else ""
-                    print("tx on%s" % extra)
-                else:
-                    # Pause: keep the queued pattern and payload so 'tx on'
-                    # resumes. A new send or 'mode' replaces the pattern.
-                    pico_tx.stop()
-                    extra = " - paused, %d symbols left" % pico_tx.pending() if pico_tx.pending() else ""
-                    print("tx off%s" % extra)
+                # Stop the engine and move the pattern back to its first
+                # symbol. A later 'tx on' starts the pattern again.
+                pico_tx.stop()
+                extra = " - stopped, %d symbols queued" % pico_tx.pending() if pico_tx.pending() else ""
+                print("tx off%s" % extra)
         elif cmd == "tone":
             if arg is None or arg == "off":
                 pico_tx.tone_stop()
@@ -1329,12 +1373,12 @@ def do_command(line, autolog=True):
                 else:
                     print("usage: tone <hz> [hz2] [level%% 0-100]  |  tone off")
         elif cmd in ("fsk", "ook", "psk"):
-            rep, toks = parse_repeat(parts[1:])
+            rep, gap, toks = parse_repeat(parts[1:])
             need = 2 if cmd == "ook" else 3
             data = None
             baud = None
             if rep is None or len(toks) < need:
-                print("usage: %s <baud> %s <hex-symbols> [repeat [n]]"
+                print("usage: %s <baud> %s <hex-symbols> [repeat [n]] [gap ms]"
                       % (cmd, "<shift_hz>" if cmd == "fsk" else ("<order 2|4>" if cmd == "psk" else "")))
                 print("  e.g. fsk 1200 4500 55aa0f  |  ook 2000 aaaa repeat 0  |  psk 2400 2 abcd repeat 5")
             else:
@@ -1362,11 +1406,16 @@ def do_command(line, autolog=True):
                             desc = "ook %d baud" % baud
                             pico_tx.ook_config(baud)
                 if data is None:
-                    print("usage: %s <baud> ... <hex-symbols> [repeat [n]]" % cmd)
+                    print("usage: %s <baud> ... <hex-symbols> [repeat [n]] [gap ms]" % cmd)
                 else:
+                    if rep == 1:
+                        gap = 0
+                    elif gap is None:
+                        gap = default_gap_ms(cmd, baud)
                     LAST_TX = "%s, %d sym: %s" % (desc, len(data), hex_str(data))
                     pico_tx.clear_symbols()
                     pico_tx.set_repeat(rep)
+                    pico_tx.set_repeat_gap(gap)
                     pico_tx.start()
                     n = pico_tx.send(data)
                     print("%s %d baud: queued %d/%d symbols%s"
@@ -1376,18 +1425,23 @@ def do_command(line, autolog=True):
                     if autolog:
                         show_log()
         elif cmd == "cw":
-            rep, toks = parse_repeat(parts[1:])
+            rep, gap, toks = parse_repeat(parts[1:])
             text = " ".join(toks)
             if rep is None or not text:
-                print("usage: cw <text> [repeat [n]]  (Morse on the carrier, 20 wpm)")
+                print("usage: cw <text> [repeat [n]] [gap ms]  (Morse on the carrier, 20 wpm)")
             else:
                 baud, data = morse_ook(text)
+                if rep == 1:
+                    gap = 0
+                elif gap is None:
+                    gap = default_gap_ms("cw", baud)
                 MODE = "cw"
                 LAST_TX = "cw 20wpm: %s" % text
                 pico_tx.set_mode("cw")
                 pico_tx.set_symbol_rate(baud)
                 pico_tx.clear_symbols()
                 pico_tx.set_repeat(rep)
+                pico_tx.set_repeat_gap(gap)
                 pico_tx.start()
                 n = pico_tx.send(data)
                 print("cw 20 wpm (baud %d): queued %d/%d elements%s"
