@@ -65,7 +65,9 @@
 `fsk`/`psk` 为 250ms。`gap 0` 关闭间隔。
 
 说明：
-- `fsk`/`ook`/`psk`/`cw` 共用固件内 1024 符号 FIFO，超出部分会被拒绝（`send` 返回实际接受的数量）。`baud` 要配合 PLL 环路带宽（宽带 FM 下几 kbaud 量级）。
+- keyed 模式（`fsk`/`ook`/`psk`/`cw`）log 的 `sym=` 字段显示当前空口上的数据：
+  `fsk`/`ook`/`psk` 显示符号字节 `\xNN`（十六进制大写）；`cw` 显示当前码元所属的文本字符。
+- `fsk`/`ook`/`psk`/`cw` 共用固件内 1024 符号 FIFO，超出部分会被拒绝（`send` 返回实际接受的数量）。`baud` 要配合 PLL 环路带宽（宽带 fsk/psk 下几 kbaud 量级）。
 - `shift_hz` 必须落在 `init(carrier ± deviation)` 设定的 PLL 窗口内。
 - `chirp` 频率为绝对 Hz，同样必须在窗口内。
 - `cw` 是把摩斯编码成 OOK（点/划 = 固定时长通断）；接收机调到该载波并用 CW/AM 模式才能听到。

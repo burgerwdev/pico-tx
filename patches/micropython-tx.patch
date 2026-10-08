@@ -199,10 +199,10 @@ index 0000000..1cdd102
 +target_link_libraries(usermod INTERFACE usermod_pico_tx)
 diff --git a/ports/rp2/tx/modpico_tx.c b/ports/rp2/tx/modpico_tx.c
 new file mode 100644
-index 0000000..6089350
+index 0000000..63573b7
 --- /dev/null
 +++ b/ports/rp2/tx/modpico_tx.c
-@@ -0,0 +1,822 @@
+@@ -0,0 +1,829 @@
 +/*
 + * modpico_tx.c
 + *
@@ -886,6 +886,12 @@ index 0000000..6089350
 +}
 +static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_current_symbol_obj, mod_pico_tx_current_symbol);
 +
++// pico_tx.symbol_index() -> the position of that symbol in the pattern.
++static mp_obj_t mod_pico_tx_symbol_index(void) {
++    return mp_obj_new_int_from_uint(tx_modulator_symbol_index());
++}
++static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_symbol_index_obj, mod_pico_tx_symbol_index);
++
 +// pico_tx.clear_symbols() - drop the queued pattern / break a running loop.
 +static mp_obj_t mod_pico_tx_clear_symbols(void) {
 +    tx_modulator_clear_symbols();
@@ -1010,6 +1016,7 @@ index 0000000..6089350
 +    { MP_ROM_QSTR(MP_QSTR_set_repeat_gap), MP_ROM_PTR(&mod_pico_tx_set_repeat_gap_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_repeat_gap), MP_ROM_PTR(&mod_pico_tx_repeat_gap_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_current_symbol), MP_ROM_PTR(&mod_pico_tx_current_symbol_obj) },
++    { MP_ROM_QSTR(MP_QSTR_symbol_index), MP_ROM_PTR(&mod_pico_tx_symbol_index_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_clear_symbols), MP_ROM_PTR(&mod_pico_tx_clear_symbols_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_set_symbol_rate), MP_ROM_PTR(&mod_pico_tx_set_symbol_rate_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_key), MP_ROM_PTR(&mod_pico_tx_key_obj) },
@@ -1668,10 +1675,10 @@ index 0000000..a58875f
 +#endif // _PICO_FRACTIONAL_PLL_H
 diff --git a/ports/rp2/tx/tx_modulator.c b/ports/rp2/tx/tx_modulator.c
 new file mode 100644
-index 0000000..47055d6
+index 0000000..3c42b27
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.c
-@@ -0,0 +1,1517 @@
+@@ -0,0 +1,1530 @@
 +/*
 + * tx_modulator.c
 + *
@@ -1934,8 +1941,8 @@ index 0000000..47055d6
 +static volatile uint32_t s_repeat;        // total passes: 0 = forever, N = N times
 +static volatile uint32_t s_passes_done;   // completed passes of the pattern
 +static volatile bool s_repeat_done;       // true after the last pass ends
-+static volatile uint32_t s_sym_sent;      // symbols actually consumed
 +static volatile uint8_t s_sym_current;    // the last symbol that the engine loaded
++static volatile uint16_t s_sym_index;     // its position in the pattern (0 = first)
 +static volatile uint32_t s_repeat_gap;    // silence between passes, in samples
 +static volatile uint32_t s_gap_left;      // samples that are left in the gap
 +static volatile bool s_restart_pending;   // true when the gap is complete
@@ -1988,6 +1995,8 @@ index 0000000..47055d6
 +        }
 +    }
 +    uint8_t sym = 0;
++    // Position of this symbol in the pattern, counted from the first symbol.
++    s_sym_index = (uint16_t)((tail - s_sym_loop_start) & TX_SYM_FIFO_MASK);
 +    if (tail != s_sym_head) {
 +        sym = s_sym_fifo[tail];
 +        s_sym_tail = (uint16_t)((tail + 1) & TX_SYM_FIFO_MASK);
@@ -2102,7 +2111,10 @@ index 0000000..47055d6
 +    case TX_MOD_PSK: {
 +        if (s_gap_left) {
 +            // Gap between passes: key the RF off. The receiver sees a break.
++            // Hold the countdown at 0, so the next pass starts as soon as the
++            // gap ends.
 +            s_gap_left--;
++            s_sym_countdown = 0;
 +            key_scheme = true;
 +            keyed = false;
 +            break;
@@ -2110,10 +2122,10 @@ index 0000000..47055d6
 +        if (s_sym_countdown == 0) {
 +            tx_symbol_load();
 +            s_sym_countdown = s_sps ? s_sps : 1;
-+            s_sym_sent++;
 +            if (s_gap_left) {
 +                // The gap started at this tick. Key the RF off now.
 +                s_gap_left--;
++                s_sym_countdown = 0;
 +                key_scheme = true;
 +                keyed = false;
 +                break;
@@ -2264,8 +2276,8 @@ index 0000000..47055d6
 +    s_repeat = 1;
 +    s_passes_done = 0;
 +    s_repeat_done = false;
-+    s_sym_sent = 0;
 +    s_sym_current = 0;
++    s_sym_index = 0;
 +    s_repeat_gap = 0;
 +    s_gap_left = 0;
 +    s_restart_pending = false;
@@ -2387,6 +2399,7 @@ index 0000000..47055d6
 +    s_repeat_done = false;
 +    s_sym_countdown = 1;
 +    s_sym_current = 0;
++    s_sym_index = 0;
 +    s_gap_left = 0;
 +    s_restart_pending = false;
 +    s_rf_key = false;
@@ -2492,6 +2505,7 @@ index 0000000..47055d6
 +    s_repeat = n;
 +    s_passes_done = 0;
 +    s_repeat_done = false;
++    s_sym_index = 0;
 +    s_gap_left = 0;
 +    s_restart_pending = false;
 +}
@@ -2514,6 +2528,11 @@ index 0000000..47055d6
 +    return s_sym_current;
 +}
 +
++// Get the position of that symbol in the pattern. 0 = the first symbol.
++uint16_t tx_modulator_symbol_index(void) {
++    return s_sym_index;
++}
++
 +// Drop any queued/looping pattern and stop repeating.  Safe to call while the
 +// ISR runs (interrupts are briefly disabled).  Used to break a running loop
 +// from the control layer before queuing a new pattern.
@@ -2527,6 +2546,7 @@ index 0000000..47055d6
 +    s_repeat_done = false;
 +    s_sym_countdown = 1;
 +    s_sym_current = 0;
++    s_sym_index = 0;
 +    s_gap_left = 0;
 +    s_restart_pending = false;
 +    s_rf_key = false;
@@ -3191,10 +3211,10 @@ index 0000000..47055d6
 +#endif // MICROPY_HW_TX
 diff --git a/ports/rp2/tx/tx_modulator.h b/ports/rp2/tx/tx_modulator.h
 new file mode 100644
-index 0000000..11b48a7
+index 0000000..d1eae81
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.h
-@@ -0,0 +1,246 @@
+@@ -0,0 +1,250 @@
 +/*
 + * tx_modulator.h
 + *
@@ -3324,6 +3344,10 @@ index 0000000..11b48a7
 +
 +// Get the last symbol byte that the engine loaded (FSK, OOK, CW, PSK).
 +uint8_t tx_modulator_current_symbol(void);
++
++// Get the position of that symbol in the pattern. 0 = the first symbol. The
++// console uses it to show the CW text character that owns the symbol.
++uint16_t tx_modulator_symbol_index(void);
 +
 +// Drop any queued/looping pattern and stop repeating (breaks a running loop).
 +void tx_modulator_clear_symbols(void);

@@ -20,11 +20,11 @@ import time
 
 import pico_tx
 
-VERSION = "0.1.2"          # console release version (see release README)
+VERSION = "0.1.3"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
 # (release/firmware/picotx_firmware.uf2).  Shown by `ver`.
-FW_SHA256 = "94f62c10920a0f6ff982a5b95082b6b4d9383cc1363f751ebe11b61f49add4a0"
+FW_SHA256 = "011f4b55af5a6603769eae48af94634f6930bc1ba9e7cabc1c3f925d6ba92b4a"
 
 # Project links shown by the `ver` command.
 PROJECT_URL = "https://git.sr.ht/~bytewolf/pico-tx"
@@ -98,6 +98,9 @@ CONSOLE_ON = True
 LAST_CHIRP = (0, 0, 0)
 # Short description of the last transmission (payload) for `log`/`status`.
 LAST_TX = ""
+# For the last `cw` send: the character that owns each symbol, one per
+# element of the Morse keying stream (a space for the gaps).
+LAST_CW_CHARS = ""
 
 # ITU Morse timing (dots/dashes/dah) - sent by the `cw` command.
 MORSE = {
@@ -536,7 +539,10 @@ CMD_DETAILS.update({
   Example: service cw CQ DE PICO repeat 0""",
     "log": """log - live transmit log (one line/s; Ctrl-C stops, 'log' resumes).
   Auto-opened after cw/fsk/ook/psk/tone/chirp.
-  Shows elapsed time, mode, carrier, RF state and mode-specific detail.""",
+  Shows elapsed time, mode, carrier, RF state and mode-specific detail.
+  In keyed modes, sym= shows the data that is on the air now. FSK, OOK, and
+  PSK show the symbol byte as \\xNN (upper-case hex). CW shows the text
+  character that owns the current keying element.""",
 })
 
 
@@ -580,26 +586,33 @@ def parse_hex_bytes(s):
 
 def morse_ook(text, wpm=20):
     """Encode `text` as an OOK symbol stream (1 = carrier on, 0 = off) at the
-    Morse element rate.  Returns (baud, bytes).  Because CW is just keyed
-    OOK, it reuses the symbol engine, so `repeat` works for CW too and the
-    console is never blocked while sending."""
+    Morse element rate.  Return (baud, data, owner): data is the keying
+    stream, and owner holds the text character for each element (a space for
+    the gaps).  CW is keyed OOK, so it reuses the symbol engine, the console
+    never blocks while sending, and the log can show the owning character."""
     baud = max(1, (wpm * 5 + 3) // 6)  # dot = 1/baud s; wpm*5/6 rounded
     syms = []
+    owner = []
+
+    def add(vals, ch):
+        syms.extend(vals)
+        owner.extend(ch * len(vals))
+
     for ch in text.upper():
         if ch == " ":
-            syms.extend((0, 0, 0, 0))   # char gap 3 + 4 = 7 (word gap)
+            add((0, 0, 0, 0), " ")     # char gap 3 + 4 = 7 (word gap)
             continue
         code = MORSE.get(ch)
         if code is None:
             continue
         for e in code:
             if e == ".":
-                syms.extend((1, 0))
+                add((1, 0), ch)
             else:
-                syms.extend((1, 1, 1, 0))
-        syms.extend((0, 0))             # 3 total between characters
-    syms.extend((0, 0, 0))              # trailing gap
-    return baud, bytes(syms)
+                add((1, 1, 1, 0), ch)
+        add((0, 0), ch)                 # 3 total between characters
+    add((0, 0, 0), " ")                 # trailing gap
+    return baud, bytes(syms), "".join(owner)
 
 
 def hex_str(data, limit=48):
@@ -608,12 +621,18 @@ def hex_str(data, limit=48):
     return h if len(h) <= limit else h[:limit] + ".."
 
 
-def sym_char(b):
-    """Convert one symbol byte to text for the log. A printable ASCII byte
-    becomes its character. Any other byte becomes \\xNN."""
-    if 32 <= b < 127:
-        return chr(b)
-    return "\\x%02x" % b
+def sym_hex(b):
+    """Convert one symbol byte to hex text for the log: \\xNN, upper case.
+    FSK, OOK, and PSK send bytes, so hex shows the exact value."""
+    return "\\x%02X" % b
+
+
+def cw_char(i):
+    """Return the text character that owns symbol i of the last CW send.
+    The log uses it, so the sym field shows the text, not the keying bit."""
+    if 0 <= i < len(LAST_CW_CHARS):
+        return LAST_CW_CHARS[i]
+    return " "
 
 
 def default_gap_ms(cmd, baud):
@@ -968,8 +987,14 @@ def show_log():
             elif mode in ("fsk", "ook", "psk", "cw"):
                 rep = pico_tx.repeat()
                 gap = pico_tx.repeat_gap()
+                if mode == "cw":
+                    # CW: show the text character, not the keying bit.
+                    sym = cw_char(pico_tx.symbol_index())
+                else:
+                    # FSK/OOK/PSK: show the symbol byte as hex.
+                    sym = sym_hex(pico_tx.current_symbol())
                 detail = "sym=%-4s repeat=%-7s gap=%-5s isr=%d/s" % (
-                    sym_char(pico_tx.current_symbol()),
+                    sym,
                     "forever" if rep == 0 else ("x%d" % rep),
                     "%dms" % gap if gap else "-", isr)
             elif mode == "chirp":
@@ -1082,7 +1107,7 @@ def vbar():
 
 def do_command(line, autolog=True):
     global AUDIO_ON, PREEMPH, SQUELCH_PCT, HARMONIC, TARGET_FREQ, DEV_EFF, SILENCE_MODE, TRIM_HZ
-    global MODE, SERVICE, LAST_CHIRP, LAST_TX
+    global MODE, SERVICE, LAST_CHIRP, LAST_TX, LAST_CW_CHARS
     parts = line.split()
     if not parts:
         return True
@@ -1322,6 +1347,7 @@ def do_command(line, autolog=True):
                 MODE = arg
                 LAST_TX = ""              # payload belongs to the previous mode
                 LAST_CHIRP = (0, 0, 0)
+                LAST_CW_CHARS = ""
                 pico_tx.clear_symbols()   # break any running repeat
                 pico_tx.set_mode(arg)
                 if arg == "fm":
@@ -1430,7 +1456,8 @@ def do_command(line, autolog=True):
             if rep is None or not text:
                 print("usage: cw <text> [repeat [n]] [gap ms]  (Morse on the carrier, 20 wpm)")
             else:
-                baud, data = morse_ook(text)
+                baud, data, chars = morse_ook(text)
+                LAST_CW_CHARS = chars
                 if rep == 1:
                     gap = 0
                 elif gap is None:

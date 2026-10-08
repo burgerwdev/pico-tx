@@ -72,6 +72,10 @@ repeat. If you do not set a gap, the default depends on the mode: one word gap
 `gap 0` disables the gap.
 
 Notes:
+- In keyed modes (`fsk`/`ook`/`psk`/`cw`) the log's `sym=` field shows the
+  data on the air.  `fsk`/`ook`/`psk` show the symbol byte as `\xNN`
+  (upper-case hex).  `cw` shows the text character for the current keying
+  element.
 - `fsk`/`ook`/`psk`/`cw` share a 1024-symbol firmware FIFO; symbols beyond
   that are rejected (`send` returns how many were accepted). Choose `baud` so
   the symbol rate fits the PLL loop bandwidth (a few kbaud for wideband FM).
