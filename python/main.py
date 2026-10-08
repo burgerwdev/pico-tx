@@ -20,7 +20,7 @@ import time
 
 import pico_tx
 
-VERSION = "0.1.3"          # console release version (see release README)
+VERSION = "0.1.4"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
 # (release/firmware/picotx_firmware.uf2).  Shown by `ver`.
@@ -98,9 +98,11 @@ CONSOLE_ON = True
 LAST_CHIRP = (0, 0, 0)
 # Short description of the last transmission (payload) for `log`/`status`.
 LAST_TX = ""
-# For the last `cw` send: the character that owns each symbol, one per
-# element of the Morse keying stream (a space for the gaps).
+# For the last `cw` send: the character that owns each symbol and its
+# character number. There is one entry per element of the Morse keying
+# stream (a space and 255 for the gaps).
 LAST_CW_CHARS = ""
+LAST_CW_SEQ = b""
 
 # ITU Morse timing (dots/dashes/dah) - sent by the `cw` command.
 MORSE = {
@@ -586,33 +588,38 @@ def parse_hex_bytes(s):
 
 def morse_ook(text, wpm=20):
     """Encode `text` as an OOK symbol stream (1 = carrier on, 0 = off) at the
-    Morse element rate.  Return (baud, data, owner): data is the keying
-    stream, and owner holds the text character for each element (a space for
-    the gaps).  CW is keyed OOK, so it reuses the symbol engine, the console
-    never blocks while sending, and the log can show the owning character."""
+    Morse element rate.  Return (baud, data, owner, seq): data is the keying
+    stream; owner holds the text character for each element; seq holds the
+    character number, so the log can tell two equal characters apart (255 for
+    a gap).  CW is keyed OOK, so it reuses the symbol engine and the console
+    never blocks while sending."""
     baud = max(1, (wpm * 5 + 3) // 6)  # dot = 1/baud s; wpm*5/6 rounded
     syms = []
     owner = []
+    seq = []
+    n = 0                               # character number
 
-    def add(vals, ch):
+    def add(vals, ch, no):
         syms.extend(vals)
         owner.extend(ch * len(vals))
+        seq.extend([no] * len(vals))
 
     for ch in text.upper():
         if ch == " ":
-            add((0, 0, 0, 0), " ")     # char gap 3 + 4 = 7 (word gap)
+            add((0, 0, 0, 0), " ", 255)  # char gap 3 + 4 = 7 (word gap)
             continue
         code = MORSE.get(ch)
         if code is None:
             continue
         for e in code:
             if e == ".":
-                add((1, 0), ch)
+                add((1, 0), ch, n)
             else:
-                add((1, 1, 1, 0), ch)
-        add((0, 0), ch)                 # 3 total between characters
-    add((0, 0, 0), " ")                 # trailing gap
-    return baud, bytes(syms), "".join(owner)
+                add((1, 1, 1, 0), ch, n)
+        add((0, 0), ch, n)              # 3 total between characters
+        n += 1
+    add((0, 0, 0), " ", 255)            # trailing gap
+    return baud, bytes(syms), "".join(owner), bytes(seq)
 
 
 def hex_str(data, limit=48):
@@ -933,12 +940,38 @@ def _vu_bar(width=10, n=128):
     return "[" + "#" * filled + "." * (width - filled) + "]"
 
 
+def _show_log_cw(t0):
+    """CW transmit log: one line for each keyed character.  The character
+    number, not the character, marks a new line, so two equal characters in
+    a row both appear.  t = seconds in the log."""
+    print("    t   char")
+    last_no = None
+    try:
+        while True:
+            time.sleep_ms(50)
+            idx = pico_tx.symbol_index()
+            if idx >= len(LAST_CW_SEQ):
+                last_no = None          # the pattern is idle
+                continue
+            no = LAST_CW_SEQ[idx]
+            if no != last_no:
+                ch = cw_char(idx)
+                if ch == " ":
+                    ch = "\u2423"    # visible mark for a word gap
+                el = time.ticks_diff(time.ticks_ms(), t0) / 1000.0
+                print("%6.1fs %s" % (el, ch))
+            last_no = no
+    except KeyboardInterrupt:
+        print("(log stopped; type 'log' to resume)")
+
+
 def show_log():
     """Live transmit log: one status line per second until Ctrl-C.  Run
     `log` again to resume.  Auto-started after cw/fsk/ook/psk/tone/chirp.
 
     Fields are mode-aware: FM shows audio/drift/VU, keyed modes show the
-    symbol queue and repeat, chirp shows its sweep.  t = seconds in the log."""
+    symbol queue and repeat, chirp shows its sweep.  CW prints one line per
+    keyed character.  t = seconds in the log."""
     t0 = time.ticks_ms()
     prev_isr = pico_tx.diag()[0]
     prev_t = t0
@@ -946,6 +979,9 @@ def show_log():
     print("tx log - Ctrl-C to stop")
     if LAST_TX:
         print("payload: %s" % LAST_TX)
+    if pico_tx.mode() == "cw":
+        _show_log_cw(t0)
+        return
     print("    t     mode   carrier         RF   detail")
     try:
         while True:
@@ -984,17 +1020,11 @@ def show_log():
             elif mode == "tone":
                 detail = "tone=%-6s isr=%d/s" % (
                     ("%dHz" % pico_tx.tone_hz()) if pico_tx.tone_on() else "off", isr)
-            elif mode in ("fsk", "ook", "psk", "cw"):
+            elif mode in ("fsk", "ook", "psk"):
                 rep = pico_tx.repeat()
                 gap = pico_tx.repeat_gap()
-                if mode == "cw":
-                    # CW: show the text character, not the keying bit.
-                    sym = cw_char(pico_tx.symbol_index())
-                else:
-                    # FSK/OOK/PSK: show the symbol byte as hex.
-                    sym = sym_hex(pico_tx.current_symbol())
                 detail = "sym=%-4s repeat=%-7s gap=%-5s isr=%d/s" % (
-                    sym,
+                    sym_hex(pico_tx.current_symbol()),
                     "forever" if rep == 0 else ("x%d" % rep),
                     "%dms" % gap if gap else "-", isr)
             elif mode == "chirp":
@@ -1107,7 +1137,7 @@ def vbar():
 
 def do_command(line, autolog=True):
     global AUDIO_ON, PREEMPH, SQUELCH_PCT, HARMONIC, TARGET_FREQ, DEV_EFF, SILENCE_MODE, TRIM_HZ
-    global MODE, SERVICE, LAST_CHIRP, LAST_TX, LAST_CW_CHARS
+    global MODE, SERVICE, LAST_CHIRP, LAST_TX, LAST_CW_CHARS, LAST_CW_SEQ
     parts = line.split()
     if not parts:
         return True
@@ -1348,6 +1378,7 @@ def do_command(line, autolog=True):
                 LAST_TX = ""              # payload belongs to the previous mode
                 LAST_CHIRP = (0, 0, 0)
                 LAST_CW_CHARS = ""
+                LAST_CW_SEQ = b""
                 pico_tx.clear_symbols()   # break any running repeat
                 pico_tx.set_mode(arg)
                 if arg == "fm":
@@ -1442,8 +1473,8 @@ def do_command(line, autolog=True):
                     pico_tx.clear_symbols()
                     pico_tx.set_repeat(rep)
                     pico_tx.set_repeat_gap(gap)
+                    n = pico_tx.send(data)   # queue first, then start: no idle symbol
                     pico_tx.start()
-                    n = pico_tx.send(data)
                     print("%s %d baud: queued %d/%d symbols%s"
                           % (cmd.upper(), baud, n, len(data),
                              " - repeat forever" if rep == 0
@@ -1456,8 +1487,9 @@ def do_command(line, autolog=True):
             if rep is None or not text:
                 print("usage: cw <text> [repeat [n]] [gap ms]  (Morse on the carrier, 20 wpm)")
             else:
-                baud, data, chars = morse_ook(text)
+                baud, data, chars, seq = morse_ook(text)
                 LAST_CW_CHARS = chars
+                LAST_CW_SEQ = seq
                 if rep == 1:
                     gap = 0
                 elif gap is None:
@@ -1469,8 +1501,8 @@ def do_command(line, autolog=True):
                 pico_tx.clear_symbols()
                 pico_tx.set_repeat(rep)
                 pico_tx.set_repeat_gap(gap)
+                n = pico_tx.send(data)       # queue first, then start: no idle symbol
                 pico_tx.start()
-                n = pico_tx.send(data)
                 print("cw 20 wpm (baud %d): queued %d/%d elements%s"
                       % (baud, n, len(data),
                          " - repeat forever" if rep == 0
