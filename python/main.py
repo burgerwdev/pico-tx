@@ -20,7 +20,7 @@ import time
 
 import pico_tx
 
-VERSION = "0.1.4"          # console release version (see release README)
+VERSION = "0.1.5"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
 # (release/firmware/picotx_firmware.uf2).  Shown by `ver`.
@@ -940,52 +940,38 @@ def _vu_bar(width=10, n=128):
     return "[" + "#" * filled + "." * (width - filled) + "]"
 
 
-def _show_log_cw(t0):
-    """CW transmit log: one line for each keyed character.  The character
-    number, not the character, marks a new line, so two equal characters in
-    a row both appear.  t = seconds in the log."""
-    print("    t   char")
-    last_no = None
-    try:
-        while True:
-            time.sleep_ms(50)
-            idx = pico_tx.symbol_index()
-            if idx >= len(LAST_CW_SEQ):
-                last_no = None          # the pattern is idle
-                continue
-            no = LAST_CW_SEQ[idx]
-            if no != last_no:
-                ch = cw_char(idx)
-                if ch == " ":
-                    ch = "\u2423"    # visible mark for a word gap
-                el = time.ticks_diff(time.ticks_ms(), t0) / 1000.0
-                print("%6.1fs %s" % (el, ch))
-            last_no = no
-    except KeyboardInterrupt:
-        print("(log stopped; type 'log' to resume)")
+def _repeat_txt():
+    """Repeat field for the log: 'forever' for 0, else 'xN'."""
+    rep = pico_tx.repeat()
+    return "forever" if rep == 0 else ("x%d" % rep)
+
+
+def _gap_txt():
+    """Gap field for the log: the gap in ms, or '-' when there is none."""
+    gap = pico_tx.repeat_gap()
+    return "%dms" % gap if gap else "-"
 
 
 def show_log():
-    """Live transmit log: one status line per second until Ctrl-C.  Run
-    `log` again to resume.  Auto-started after cw/fsk/ook/psk/tone/chirp.
+    """Live transmit log until Ctrl-C.  Run `log` again to resume.
+    Auto-started after cw/fsk/ook/psk/tone/chirp.
 
-    Fields are mode-aware: FM shows audio/drift/VU, keyed modes show the
-    symbol queue and repeat, chirp shows its sweep.  CW prints one line per
-    keyed character.  t = seconds in the log."""
+    Every mode shows mode, carrier, RF state and a mode detail.  Normal modes
+    print one line per second; CW prints one line for each keyed character, so
+    no character is hidden by the sample rate.  t = seconds in the log."""
     t0 = time.ticks_ms()
     prev_isr = pico_tx.diag()[0]
     prev_t = t0
+    last_row = t0
+    last_no = None
     u0, d0 = ring_stats()
     print("tx log - Ctrl-C to stop")
     if LAST_TX:
         print("payload: %s" % LAST_TX)
-    if pico_tx.mode() == "cw":
-        _show_log_cw(t0)
-        return
     print("    t     mode   carrier         RF   detail")
     try:
         while True:
-            time.sleep_ms(1000)
+            time.sleep_ms(50 if pico_tx.mode() == "cw" else 1000)
             now = pico_tx.diag()[0]
             t = time.ticks_ms()
             dt = time.ticks_diff(t, prev_t) or 1
@@ -1006,7 +992,29 @@ def show_log():
                 rf = "gate"      # FM silence gate holding the RF off
             else:
                 rf = "on"
-            if not run:
+            if mode == "cw":
+                # One line for each keyed character, so no character is
+                # hidden by the sample rate.  Any other row (idle, or a
+                # character that does not change) prints once per second.
+                sym = None
+                if run:
+                    idx = pico_tx.symbol_index()
+                    if idx < len(LAST_CW_SEQ):
+                        no = LAST_CW_SEQ[idx]
+                        if no == last_no:
+                            continue        # same character: already shown
+                        last_no = no
+                        ch = cw_char(idx)
+                        sym = "\u2423" if ch == " " else ch
+                    else:
+                        last_no = None
+                if sym is None:
+                    if time.ticks_diff(t, last_row) < 1000:
+                        continue
+                    sym = "-"
+                detail = "sym=%-4s repeat=%-7s gap=%-5s isr=%d/s" % (
+                    sym, _repeat_txt(), _gap_txt(), isr)
+            elif not run:
                 detail = "engine stopped"
             elif mode == "fm":
                 u, d = ring_stats()
@@ -1021,18 +1029,16 @@ def show_log():
                 detail = "tone=%-6s isr=%d/s" % (
                     ("%dHz" % pico_tx.tone_hz()) if pico_tx.tone_on() else "off", isr)
             elif mode in ("fsk", "ook", "psk"):
-                rep = pico_tx.repeat()
-                gap = pico_tx.repeat_gap()
                 detail = "sym=%-4s repeat=%-7s gap=%-5s isr=%d/s" % (
                     sym_hex(pico_tx.current_symbol()),
-                    "forever" if rep == 0 else ("x%d" % rep),
-                    "%dms" % gap if gap else "-", isr)
+                    _repeat_txt(), _gap_txt(), isr)
             elif mode == "chirp":
                 f0, f1, ms = LAST_CHIRP
                 detail = "%.3f->%.3f MHz %dms isr=%d/s" % (
                     f0 / 1e6, f1 / 1e6, ms, isr)
             else:
                 detail = "isr=%d/s" % isr
+            last_row = t
             print("%6.1fs %-6s %-15s %-4s %s" % (el, mode, car, rf, detail))
     except KeyboardInterrupt:
         print("(log stopped; type 'log' to resume)")
