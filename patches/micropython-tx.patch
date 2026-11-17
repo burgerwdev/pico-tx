@@ -199,10 +199,10 @@ index 0000000..1cdd102
 +target_link_libraries(usermod INTERFACE usermod_pico_tx)
 diff --git a/ports/rp2/tx/modpico_tx.c b/ports/rp2/tx/modpico_tx.c
 new file mode 100644
-index 0000000..63573b7
+index 0000000..dfb5a64
 --- /dev/null
 +++ b/ports/rp2/tx/modpico_tx.c
-@@ -0,0 +1,829 @@
+@@ -0,0 +1,857 @@
 +/*
 + * modpico_tx.c
 + *
@@ -492,11 +492,22 @@ index 0000000..63573b7
 +static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_pwm_ctr_obj, mod_pico_tx_pwm_ctr);
 +
 +// pico_tx.isr_cost() -> average microseconds per 48kHz ISR invocation
-+// (measured by running the handler 1000 times with interrupts off).
++// (passively sampled from real interrupts; never runs extra modulation).
 +static mp_obj_t mod_pico_tx_isr_cost(void) {
 +    return mp_obj_new_int_from_uint(tx_modulator_isr_cost_us());
 +}
 +static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_isr_cost_obj, mod_pico_tx_isr_cost);
++
++static mp_obj_t mod_pico_tx_timing(void) {
++    uint32_t stats[6];
++    tx_modulator_get_timing(stats);
++    mp_obj_t tuple[6];
++    for (size_t i = 0; i < 6; ++i) {
++        tuple[i] = mp_obj_new_int_from_uint(stats[i]);
++    }
++    return mp_obj_new_tuple(6, tuple);
++}
++static MP_DEFINE_CONST_FUN_OBJ_0(mod_pico_tx_timing_obj, mod_pico_tx_timing);
 +
 +// ---------------------------------------------------------------------------
 +// Diagnostics / status
@@ -722,6 +733,17 @@ index 0000000..63573b7
 +}
 +static MP_DEFINE_CONST_FUN_OBJ_1(mod_pico_tx_samples_obj, mod_pico_tx_samples);
 +
++static mp_obj_t mod_pico_tx_sample_peak(mp_obj_t count_obj) {
++    mp_int_t n = mp_obj_get_int(count_obj);
++    if (n < 0) {
++        n = 0;
++    } else if (n > 512) {
++        n = 512;
++    }
++    return MP_OBJ_NEW_SMALL_INT(tx_modulator_sample_peak((uint16_t)n));
++}
++static MP_DEFINE_CONST_FUN_OBJ_1(mod_pico_tx_sample_peak_obj, mod_pico_tx_sample_peak);
++
 +// ---------------------------------------------------------------------------
 +// Transmit schemes (all modulation happens in tx_modulator.c)
 +// ---------------------------------------------------------------------------
@@ -920,6 +942,10 @@ index 0000000..63573b7
 +    uint32_t f1 = (uint32_t)mp_obj_get_int(args[1]);
 +    uint32_t dur = (uint32_t)mp_obj_get_int(args[2]);
 +    uint32_t gap = (n_args > 3) ? (uint32_t)mp_obj_get_int(args[3]) : 0;
++    // Keep duration and period representable by the ISR's 32-bit tick count.
++    if (dur == 0 || dur > UINT32_MAX / 48u || gap > UINT32_MAX / 48u - dur) {
++        mp_raise_ValueError(MP_ERROR_TEXT("chirp duration/gap out of range"));
++    }
 +    bool rep = (n_args > 4) ? mp_obj_is_true(args[4]) : false;
 +    tx_modulator_chirp(f0, f1, dur, gap, rep);
 +    return mp_const_none;
@@ -946,6 +972,8 @@ index 0000000..63573b7
 +
 +static const mp_rom_map_elem_t pico_tx_globals_table[] = {
 +    { MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_pico_tx) },
++    { MP_ROM_QSTR(MP_QSTR_timing), MP_ROM_PTR(&mod_pico_tx_timing_obj) },
++    { MP_ROM_QSTR(MP_QSTR_sample_peak), MP_ROM_PTR(&mod_pico_tx_sample_peak_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_init), MP_ROM_PTR(&mod_pico_tx_init_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_enable_output), MP_ROM_PTR(&mod_pico_tx_enable_output_obj) },
 +    { MP_ROM_QSTR(MP_QSTR_set_freq), MP_ROM_PTR(&mod_pico_tx_set_freq_obj) },
@@ -1034,10 +1062,10 @@ index 0000000..63573b7
 +MP_REGISTER_MODULE(MP_QSTR_pico_tx, mp_module_pico_tx);
 diff --git a/ports/rp2/tx/pico_fractional_pll.c b/ports/rp2/tx/pico_fractional_pll.c
 new file mode 100644
-index 0000000..e479210
+index 0000000..1556296
 --- /dev/null
 +++ b/ports/rp2/tx/pico_fractional_pll.c
-@@ -0,0 +1,554 @@
+@@ -0,0 +1,552 @@
 +/*
 +  pico_fractional_pll.c
 +  Pseudo Fractional PLL for RP2040
@@ -1193,8 +1221,19 @@ index 0000000..e479210
 +  pico_fractional_pll_instance.gpclk = gpclk;
 +  pico_fractional_pll_instance.srcclk = src;
 +
-+  // initially the output is disabled
-+  pico_fractional_pll_enable_output(false);
++  // Configure the dedicated RF pad and clock once, with the pin disconnected.
++  // Keying then only switches the mux: no pad setup or divider restart in the
++  // 48kHz ISR. This also makes the first init leave RF off until explicitly
++  // armed (enable_output() cannot run before core1 has been started).
++  gpio_set_function(gpio, GPIO_FUNC_NULL);
++  gpio_set_dir(gpio, GPIO_IN);
++  gpio_set_pulls(gpio, false, false);
++  gpio_set_drive_strength(gpio, drive_strength);
++  gpio_set_slew_rate(gpio, slew_rate);
++  clocks_hw->clk[gpclk].div = pico_fractional_pll_instance.clkdiv << CLOCKS_CLK_GPOUT0_DIV_INT_LSB;
++  clocks_hw->clk[gpclk].ctrl = (src << CLOCKS_CLK_GPOUT0_CTRL_AUXSRC_LSB) |
++    CLOCKS_CLK_GPOUT0_CTRL_ENABLE_BITS |
++    ((pico_fractional_pll_instance.clkdiv & 1) ? CLOCKS_CLK_GPOUT0_CTRL_DC50_BITS : 0);
 +
 +  pico_fractional_pll_instance.acc_increment = 0x80000000;
 +  pll_init(pll, s_pll_refdiv, (ref * pico_fractional_pll_instance.fbdiv_low), pico_fractional_pll_instance.postdiv1, pico_fractional_pll_instance.postdiv2);
@@ -1225,29 +1264,16 @@ index 0000000..e479210
 +  return 0;
 +}
 +
-+void pico_fractional_pll_enable_output(bool enable)
++void __not_in_flash_func(pico_fractional_pll_enable_output)(bool enable)
 +{
 +  if (s_core1_state == core1_state_not_started) {
 +    return;
 +  }
 +
-+  if (enable) {
-+    clock_gpio_init_int_frac(pico_fractional_pll_instance.gpio, pico_fractional_pll_instance.srcclk, pico_fractional_pll_instance.clkdiv, 0);
-+    if (pico_fractional_pll_instance.clkdiv & 1) {
-+      // enable duty cycle correction for odd divisor
-+      clocks_hw->clk[pico_fractional_pll_instance.gpclk].ctrl |= CLOCKS_CLK_GPOUT0_CTRL_DC50_BITS;
-+    }
-+    else {
-+      clocks_hw->clk[pico_fractional_pll_instance.gpclk].ctrl &= ~CLOCKS_CLK_GPOUT0_CTRL_DC50_BITS;
-+    }
-+    gpio_set_drive_strength(pico_fractional_pll_instance.gpio, pico_fractional_pll_instance.drive_strength);
-+    gpio_set_slew_rate(pico_fractional_pll_instance.gpio, pico_fractional_pll_instance.slew_rate);
-+  }
-+  else {
-+    gpio_set_function(pico_fractional_pll_instance.gpio, GPIO_FUNC_NULL);
-+    gpio_set_dir(pico_fractional_pll_instance.gpio, GPIO_IN);
-+    gpio_set_pulls(pico_fractional_pll_instance.gpio, false, false);
-+  }
++  // Preserve the free-running clock and configured pad strength/slew.
++  // NULL makes the pin high impedance, as before; GPCK reconnects the RF.
++  io_bank0_hw->io[pico_fractional_pll_instance.gpio].ctrl =
++    (enable ? GPIO_FUNC_GPCK : GPIO_FUNC_NULL) << IO_BANK0_GPIO0_CTRL_FUNCSEL_LSB;
 +}
 +
 +void pico_fractional_pll_set_drive_strength(enum gpio_drive_strength drive_strength)
@@ -1268,7 +1294,7 @@ index 0000000..e479210
 +  gpio_set_slew_rate(pico_fractional_pll_instance.gpio, pico_fractional_pll_instance.slew_rate);
 +}
 +
-+void pico_fractional_pll_set_freq_u32(uint32_t freq)
++void __not_in_flash_func(pico_fractional_pll_set_freq_u32)(uint32_t freq)
 +{
 +  if (freq < pico_fractional_pll_instance.freq_low) {
 +    pico_fractional_pll_instance.acc_increment = 0;
@@ -1673,12 +1699,63 @@ index 0000000..a58875f
 +void pico_fractional_pll_get_freq_range(uint32_t *freq_low, uint32_t *freq_high);
 +
 +#endif // _PICO_FRACTIONAL_PLL_H
+diff --git a/ports/rp2/tx/tx_math.h b/ports/rp2/tx/tx_math.h
+new file mode 100644
+index 0000000..1a48e8b
+--- /dev/null
++++ b/ports/rp2/tx/tx_math.h
+@@ -0,0 +1,45 @@
++/* Exact integer helpers for the 48 kHz path; no wide multiply or divide. */
++#ifndef MICROPY_INCLUDED_RP2_TX_TX_MATH_H
++#define MICROPY_INCLUDED_RP2_TX_TX_MATH_H
++
++#include <stdbool.h>
++#include <stdint.h>
++
++// Equivalent to (uint32_t)(((int64_t)sample * deviation) >> 15).
++// sample is int16: the signed low product always fits int32.  The unsigned
++// high product preserves modulo-2^32 frequency arithmetic for every deviation.
++static inline uint32_t tx_sample_offset(int32_t sample, uint32_t deviation) {
++    return (uint32_t)sample * (deviation >> 15)
++        + (uint32_t)((sample * (int32_t)(deviation & 32767u)) >> 15);
++}
++
++typedef struct {
++    uint32_t freq, step, remainder, error;
++    bool down;
++} tx_ramp_t;
++
++// Control path only.  Bresenham-style remainder accumulation reproduces
++// f0 + trunc((f1-f0)*tick/duration) exactly, including descending sweeps.
++static inline tx_ramp_t tx_ramp_init(uint32_t f0, uint32_t f1, uint32_t duration) {
++    uint32_t span = f0 > f1 ? f0 - f1 : f1 - f0;
++    tx_ramp_t ramp = { .freq = f0, .down = f0 > f1 };
++    if (duration) {
++        ramp.step = span / duration;
++        ramp.remainder = span % duration;
++    }
++    return ramp;
++}
++
++static inline void tx_ramp_advance(tx_ramp_t *ramp, uint32_t duration) {
++    uint32_t step = ramp->step;
++    // Avoid overflowing error + remainder even for very long sweeps.
++    if (ramp->error >= duration - ramp->remainder) {
++        ramp->error -= duration - ramp->remainder;
++        step++;
++    } else {
++        ramp->error += ramp->remainder;
++    }
++    ramp->freq = ramp->down ? ramp->freq - step : ramp->freq + step;
++}
++
++#endif
 diff --git a/ports/rp2/tx/tx_modulator.c b/ports/rp2/tx/tx_modulator.c
 new file mode 100644
-index 0000000..3c42b27
+index 0000000..ffc76d7
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.c
-@@ -0,0 +1,1530 @@
+@@ -0,0 +1,1595 @@
 +/*
 + * tx_modulator.c
 + *
@@ -1687,7 +1764,7 @@ index 0000000..3c42b27
 + * Real-time data path (no Python involvement):
 + *
 + *   host (48kHz stereo 16-bit PCM)
-+ *     -> TinyUSB audio driver RX callback (tud_task / soft IRQ context)
++ *     -> TinyUSB audio driver RX callback (USB hard IRQ, core 0)
 + *     -> mono mix + volume/mute applied here
 + *     -> SPSC ring buffer
 + *     -> PWM slice wrap interrupt at exactly 48kHz (clk_sys 48MHz / 1000)
@@ -1711,6 +1788,7 @@ index 0000000..3c42b27
 +
 +// 256-entry Q14 sine table for the internal DDS tone generator.
 +#include "tx_sine_table.h"
++#include "tx_math.h"
 +
 +// Include TinyUSB before checking CFG_TUD_AUDIO: tusb.h (via tusb_config.h)
 +// is what defines CFG_TUD_AUDIO in the first place.
@@ -1720,7 +1798,7 @@ index 0000000..3c42b27
 +
 +// ---------------------------------------------------------------------------
 +// SPSC ring buffer of mono int16 samples.
-+// Producer: tud_audio_rx_done_isr() (tud_task context, core 0).
++// Producer: tud_audio_rx_done_isr() (USB IRQ, core 0).
 +// Consumer: PWM wrap ISR (core 0).  Same core, so volatile head/tail is safe.
 +// ---------------------------------------------------------------------------
 +
@@ -1790,6 +1868,10 @@ index 0000000..3c42b27
 +static bool s_led_pwm_ready;
 +static volatile uint32_t s_isr_ticks;   // 48kHz ISR invocation counter
 +static volatile uint32_t s_rx_frames;   // mono frames enqueued by the RX path
++// Passive timing: sample every 64th PWM IRQ, time each USB audio packet.
++// Totals wrap modulo 2^32; diagnostics take unsigned deltas over a window.
++static volatile uint32_t s_isr_samples, s_isr_total_us, s_isr_max_us;
++static volatile uint32_t s_rx_packets, s_rx_total_us, s_rx_max_us;
 +static volatile bool s_running;         // the 48kHz modulation engine is started
 +static volatile bool s_output_on;       // RF output armed (rf on / engine start)
 +
@@ -1839,7 +1921,7 @@ index 0000000..3c42b27
 +// only saturates when the signal is already several times full scale, i.e.
 +// where the limiter below clips anyway; the unclamped y is still returned so
 +// the limiter's clip counter keeps working.
-+static inline int32_t tx_biquad_run(tx_biquad_t *q, int32_t x) {
++static inline __attribute__((always_inline)) int32_t tx_biquad_run(tx_biquad_t *q, int32_t x) {
 +    if (x > 32767) {
 +        x = 32767;
 +    } else if (x < -32768) {
@@ -1910,7 +1992,7 @@ index 0000000..3c42b27
 +
 +// Linear interpolation of the Q14 sine table.  phase top 8 bits index the
 +// table, the next 16 bits interpolate; returns Q14 (-16384..16384).
-+static inline int32_t tx_dds_sine(uint32_t phase) {
++static inline __attribute__((always_inline)) int32_t tx_dds_sine(uint32_t phase) {
 +    uint32_t idx = phase >> 24;
 +    uint32_t frac = (phase >> 8) & 0xFFFF;
 +    int32_t a = s_sine_q14[idx];
@@ -1935,6 +2017,7 @@ index 0000000..3c42b27
 +static volatile uint8_t s_psk_order;      // 2 (BPSK) or 4 (QPSK)
 +static volatile int32_t s_sym_freq;       // current FSK/PSK frequency offset
 +static uint32_t s_psk_phase;              // PSK phase accumulator (2^32 = 2pi)
++static int32_t s_psk_offsets[4];          // -1/2, -1/4, 0, +1/4 turn per symbol
 +static volatile bool s_rf_key;            // CW / OOK key state
 +static volatile bool s_rf_key_applied = true; // last key state pushed to the GPOUT
 +static volatile uint16_t s_sym_loop_start; // FIFO index where the pattern restarts
@@ -1948,15 +2031,15 @@ index 0000000..3c42b27
 +static volatile bool s_restart_pending;   // true when the gap is complete
 +
 +// --- linear chirp (TX_MOD_CHIRP) ---
-+static volatile uint32_t s_chirp_f0, s_chirp_f1;
++static volatile uint32_t s_chirp_f0;
 +static volatile uint32_t s_chirp_dur;     // sweep duration in samples
 +static volatile uint32_t s_chirp_period;  // dur + gap in samples
 +static volatile bool s_chirp_repeat;
 +static uint32_t s_chirp_tick;
++static tx_ramp_t s_chirp_ramp;
 +
 +// Load the next symbol from the FIFO and translate it for the active scheme.
-+// Runs in the ISR at the symbol rate (not per sample), so the 64-bit math for
-+// the PSK phase step is affordable.
++// Runs in the ISR at the symbol rate, which can be as high as 48 kHz.
 +static void __not_in_flash_func(tx_symbol_load)(void) {
 +    uint16_t tail = s_sym_tail;
 +    if (s_restart_pending) {
@@ -2008,15 +2091,15 @@ index 0000000..3c42b27
 +    } else if (s_scheme == TX_MOD_OOK || s_scheme == TX_MOD_CW) {
 +        s_rf_key = (sym != 0);
 +    } else if (s_scheme == TX_MOD_PSK) {
-+        uint32_t order = s_psk_order ? s_psk_order : 2;
-+        uint32_t sps = s_sps ? s_sps : 1;
 +        // Target phase = sym/order of a turn.  The ISR takes the direct
 +        // rotation to the target (freq = delta/tsym), which lands exactly on
 +        // the constellation point regardless of the path taken.
-+        uint32_t target = (uint32_t)(((uint64_t)(sym % order) << 32) / order);
++        uint32_t target = s_psk_order == 4 ? (uint32_t)(sym & 3) << 30
++            : (uint32_t)(sym & 1) << 31;
 +        int32_t delta = (int32_t)(target - s_psk_phase);
-+        // freq_hz = (delta/2^32)/tsym = delta*48000/(sps*2^32)
-+        s_sym_freq = (int32_t)(((int64_t)delta * 48000) / ((int64_t)sps * 4294967296LL));
++        // delta is an exact quarter-turn multiple.  Division is performed
++        // once when configuring the symbol rate, never in the ISR.
++        s_sym_freq = s_psk_offsets[(delta >> 30) + 2];
 +        s_psk_phase = target;
 +    }
 +}
@@ -2024,6 +2107,8 @@ index 0000000..3c42b27
 +static void __time_critical_func(tx_pwm_wrap_handler)(void) {
 +    pwm_clear_irq(TX_PWM_SLICE);
 +    s_isr_ticks++;
++    bool measure = (s_isr_ticks & 63u) == 0;
++    uint32_t started = measure ? time_us_32() : 0;
 +
 +    int32_t sample = 0;
 +    uint32_t freq = s_carrier_hz;
@@ -2082,7 +2167,7 @@ index 0000000..3c42b27
 +                }
 +            }
 +        }
-+        freq = s_carrier_hz + (uint32_t)(((int64_t)sample * (int64_t)s_deviation_hz) >> 15);
++        freq = s_carrier_hz + tx_sample_offset(sample, s_deviation_hz);
 +        break;
 +    }
 +
@@ -2101,7 +2186,7 @@ index 0000000..3c42b27
 +            t = -32768;
 +        }
 +        sample = t;
-+        freq = s_carrier_hz + (uint32_t)(((int64_t)sample * (int64_t)s_deviation_hz) >> 15);
++        freq = s_carrier_hz + tx_sample_offset(sample, s_deviation_hz);
 +        break;
 +    }
 +
@@ -2145,15 +2230,22 @@ index 0000000..3c42b27
 +        uint32_t t = s_chirp_tick;
 +        uint32_t dur = s_chirp_dur;
 +        if (dur && t < dur) {
-+            int64_t span = (int64_t)s_chirp_f1 - (int64_t)s_chirp_f0;
-+            freq = (uint32_t)((int64_t)s_chirp_f0 + span * (int64_t)t / (int64_t)dur);
++            freq = s_chirp_ramp.freq;
 +        } else {
 +            freq = s_chirp_f0;
 +        }
 +        if (s_chirp_period) {
-+            s_chirp_tick++;
-+            if (s_chirp_tick >= s_chirp_period) {
-+                s_chirp_tick = s_chirp_repeat ? 0 : (s_chirp_period - 1);
++            if (t + 1 >= s_chirp_period) {
++                if (s_chirp_repeat) {
++                    s_chirp_tick = 0;
++                    s_chirp_ramp.freq = s_chirp_f0;
++                    s_chirp_ramp.error = 0;
++                }
++            } else {
++                s_chirp_tick = t + 1;
++                if (s_chirp_tick < dur) {
++                    tx_ramp_advance(&s_chirp_ramp, dur);
++                }
 +            }
 +        }
 +        break;
@@ -2164,10 +2256,8 @@ index 0000000..3c42b27
 +    }
 +
 +    if (key_scheme) {
-+        // Only touch the clock/GPIO on a key transition.  enable_output()
-+        // re-inits the GPOUT clock and the pad, so calling it every 48 kHz
-+        // tick restarts the divider each sample - that splatters the keyed
-+        // carrier and burns ISR time.  Toggle on change only.
++        // Only switch the GPIO mux on a key transition. The GPOUT clock and
++        // pad are configured once at init, preserving the running divider.
 +        if (keyed != s_rf_key_applied) {
 +            if (keyed) {
 +                pico_fractional_pll_set_freq_u32(s_carrier_hz);
@@ -2182,6 +2272,21 @@ index 0000000..3c42b27
 +    } else {
 +        s_last_freq = freq;
 +        pico_fractional_pll_set_freq_u32(freq);
++        // FSK/PSK must re-key after a repeat gap, even if the frequency did
++        // not change. FM has its separate silence gate above.
++        if (s_scheme != TX_MOD_FM && !s_rf_key_applied) {
++            pico_fractional_pll_enable_output(true);
++            s_rf_key_applied = true;
++            s_rf_gated = false;
++        }
++    }
++    if (measure) {
++        uint32_t elapsed = time_us_32() - started;
++        s_isr_samples++;
++        s_isr_total_us += elapsed;
++        if (elapsed > s_isr_max_us) {
++            s_isr_max_us = elapsed;
++        }
 +    }
 +}
 +
@@ -2251,6 +2356,8 @@ index 0000000..3c42b27
 +    s_led_pin = TX_LED_PIN;
 +    s_isr_ticks = 0;
 +    s_rx_frames = 0;
++    s_isr_samples = s_isr_total_us = s_isr_max_us = 0;
++    s_rx_packets = s_rx_total_us = s_rx_max_us = 0;
 +    s_running = false;
 +    s_output_on = false;
 +
@@ -2270,6 +2377,10 @@ index 0000000..3c42b27
 +    s_psk_order = 2;
 +    s_sym_freq = 0;
 +    s_psk_phase = 0;
++    s_psk_offsets[0] = -600;
++    s_psk_offsets[1] = -300;
++    s_psk_offsets[2] = 0;
++    s_psk_offsets[3] = 300;
 +    s_rf_key = false;
 +    s_rf_key_applied = true;
 +    s_sym_loop_start = 0;
@@ -2282,7 +2393,7 @@ index 0000000..3c42b27
 +    s_gap_left = 0;
 +    s_restart_pending = false;
 +    s_chirp_f0 = 0;
-+    s_chirp_f1 = 0;
++    s_chirp_ramp = tx_ramp_init(0, 0, 0);
 +    s_chirp_dur = 0;
 +    s_chirp_period = 0;
 +    s_chirp_repeat = false;
@@ -2327,6 +2438,8 @@ index 0000000..3c42b27
 +        s_sym_freq = 0;
 +        s_sym_countdown = 1;
 +        s_chirp_tick = 0;
++        s_chirp_ramp.freq = s_chirp_f0;
++        s_chirp_ramp.error = 0;
 +        // Force the next keyed ISR tick to re-apply the output state.
 +        s_rf_key_applied = !s_rf_key;
 +    }
@@ -2448,12 +2561,21 @@ index 0000000..3c42b27
 +    if (baud == 0) {
 +        baud = 1200;
 +    }
-+    s_sym_baud = baud;
-+    s_sps = (48000u + baud / 2) / baud;
-+    if (s_sps == 0) {
-+        s_sps = 1;
++    uint32_t sps = (48000u + baud / 2) / baud;
++    if (sps == 0) {
++        sps = 1;
 +    }
++    int32_t quarter = 12000u / sps;
++    int32_t half = 24000u / sps;
++    uint32_t irq = save_and_disable_interrupts();
++    s_sym_baud = baud;
++    s_sps = sps;
++    s_psk_offsets[0] = -half;
++    s_psk_offsets[1] = -quarter;
++    s_psk_offsets[2] = 0;
++    s_psk_offsets[3] = quarter;
 +    s_sym_countdown = 1;
++    restore_interrupts(irq);
 +}
 +
 +void tx_modulator_set_symbol_rate(uint32_t baud) {
@@ -2572,13 +2694,16 @@ index 0000000..3c42b27
 +    uint32_t gap_ms, bool repeat) {
 +    uint32_t dur = (uint32_t)(((uint64_t)duration_ms * 48000u) / 1000u);
 +    uint32_t gap = (uint32_t)(((uint64_t)gap_ms * 48000u) / 1000u);
++    tx_ramp_t ramp = tx_ramp_init(f0_hz, f1_hz, dur);
++    uint32_t irq = save_and_disable_interrupts();
 +    s_chirp_f0 = f0_hz;
-+    s_chirp_f1 = f1_hz;
++    s_chirp_ramp = ramp;
 +    s_chirp_dur = dur;
 +    s_chirp_period = dur + gap;
 +    s_chirp_repeat = repeat;
 +    s_chirp_tick = 0;
 +    s_scheme = TX_MOD_CHIRP;
++    restore_interrupts(irq);
 +}
 +
 +void tx_modulator_chirp_stop(void) {
@@ -2659,7 +2784,7 @@ index 0000000..3c42b27
 +// ---------------------------------------------------------------------------
 +
 +// Process one mono sample: returns the sample to transmit.
-+static int16_t tx_audio_process(int16_t x) {
++static int16_t __not_in_flash_func(tx_audio_process)(int16_t x) {
 +    // DC blocker (2 Hz one-pole high-pass): removes any DC offset in the
 +    // incoming stream so the average frequency stays exactly on the carrier.
 +    int32_t dcb = s_dcb_yprev + (x - s_dcb_xprev) - ((s_dcb_yprev * TX_DCB_A_Q15) >> 15);
@@ -2849,6 +2974,23 @@ index 0000000..3c42b27
 +    return (uint8_t)(((uint32_t)((s_ring_head - s_ring_tail) & TX_RING_MASK) * 100) / TX_RING_SIZE);
 +}
 +
++uint16_t tx_modulator_sample_peak(uint16_t max) {
++    uint16_t head = s_ring_head;
++    uint16_t count = (uint16_t)((head - s_ring_tail) & TX_RING_MASK);
++    if (count > max) {
++        count = max;
++    }
++    uint16_t peak = 0;
++    for (uint16_t i = 0; i < count; ++i) {
++        int32_t sample = s_ring[(head - count + i) & TX_RING_MASK];
++        uint16_t a = sample < 0 ? -sample : sample;
++        if (a > peak) {
++            peak = a;
++        }
++    }
++    return peak;
++}
++
 +uint32_t tx_modulator_last_freq(void) {
 +    return s_last_freq;
 +}
@@ -2915,15 +3057,20 @@ index 0000000..3c42b27
 +}
 +
 +uint32_t tx_modulator_isr_cost_us(void) {
-+    // Call the handler 1000 times with interrupts off; report average us/call.
-+    uint32_t irq_state = save_and_disable_interrupts();
-+    uint32_t t0 = time_us_32();
-+    for (int i = 0; i < 1000; i++) {
-+        tx_pwm_wrap_handler();
-+    }
-+    uint32_t t1 = time_us_32();
-+    restore_interrupts(irq_state);
-+    return (t1 - t0) / 1000;
++    uint32_t stats[6];
++    tx_modulator_get_timing(stats);
++    return stats[0] ? stats[1] / stats[0] : 0;
++}
++
++void tx_modulator_get_timing(uint32_t stats[6]) {
++    uint32_t irq = save_and_disable_interrupts();
++    stats[0] = s_isr_samples;
++    stats[1] = s_isr_total_us;
++    stats[2] = s_isr_max_us;
++    stats[3] = s_rx_packets;
++    stats[4] = s_rx_total_us;
++    stats[5] = s_rx_max_us;
++    restore_interrupts(irq);
 +}
 +
 +// Configure the LED GPIO as an 8-bit PWM output.
@@ -2984,7 +3131,7 @@ index 0000000..3c42b27
 +
 +// One or more audio packets received from the host.  Drain the TinyUSB FIFO
 +// into the ring buffer.
-+bool tud_audio_rx_done_isr(uint8_t rhport, uint16_t n_bytes_received, uint8_t func_id, uint8_t ep_out, uint8_t cur_alt_setting) {
++bool __not_in_flash_func(tud_audio_rx_done_isr)(uint8_t rhport, uint16_t n_bytes_received, uint8_t func_id, uint8_t ep_out, uint8_t cur_alt_setting) {
 +    (void)rhport;
 +    (void)n_bytes_received;
 +    (void)func_id;
@@ -2999,6 +3146,7 @@ index 0000000..3c42b27
 +    // (tx_modulator_init resets s_audio_active) and never re-selects it, so
 +    // the flag would otherwise stay false while audio actually flows.
 +    s_audio_active = true;
++    uint32_t started = time_us_32();
 +
 +    // Muted / routing-off fast path: drain the USB FIFO and drop the frames
 +    // WITHOUT running the DSP / ring / LED code.  The digital activity of
@@ -3008,59 +3156,53 @@ index 0000000..3c42b27
 +    // The 48kHz ISR already forces the sample to 0 while muted, so dropping
 +    // the frames here changes nothing audibly (the ring simply drains).
 +    if (s_mute || !s_audio_route_on) {
-+        int16_t junk[32];
-+        while (tud_audio_available() >= 4) {
-+            uint16_t want = tud_audio_available();
-+            if (want > sizeof(junk)) {
-+                want = sizeof(junk);
-+            }
-+            tud_audio_read(junk, want);
++        tud_audio_clear_ep_out_ff();
++    } else {
++        // One bounded read per USB packet, rather than 48 FIFO/memcpy calls.
++        // The configured FIFO holds one 1ms packet (192 bytes). Snapshot its
++        // size so this hard IRQ cannot turn into an unbounded drain loop.
++        int16_t frames[CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ / sizeof(int16_t)];
++        uint16_t bytes = tud_audio_available() & ~3u;
++        if (bytes > sizeof(frames)) {
++            bytes = sizeof(frames) & ~3u;
 +        }
-+        return true;
-+    }
-+
-+    uint16_t volume = s_volume;
-+    bool mute = s_mute;
-+
-+    while (tud_audio_available() >= 4) {
-+        int16_t frame[2];
-+        if (tud_audio_read(frame, sizeof(frame)) != sizeof(frame)) {
-+            break;
-+        }
-+        // Stereo -> mono mix, then apply mute/volume.
-+        int32_t mono = ((int32_t)frame[0] + (int32_t)frame[1]) >> 1;
-+        if (mute) {
-+            mono = 0;
-+        } else {
++        bytes = tud_audio_read(frames, bytes);
++        uint16_t volume = s_volume;
++        bool vu = s_led_mode == 3;
++        int32_t peak = s_led_peak;
++        uint32_t received = 0, dropped = 0;
++        for (uint32_t i = 0; i < bytes / 4u; i++) {
++            int32_t mono = ((int32_t)frames[2 * i] + (int32_t)frames[2 * i + 1]) >> 1;
 +            mono = (mono * (int32_t)volume) >> 15;
-+        }
-+
-+        // Band-limit + pre-emphasis + limiter.
-+        int16_t out = tx_audio_process((int16_t)mono);
-+
-+        // Audio-level LED (mode 3): fast-attack / slow-decay level follower,
-+        // so the brightness shows a readable meter instead of flickering at
-+        // the audio rate.
-+        if (s_led_mode == 3) {
-+            int32_t a = out < 0 ? -out : out;
-+            if (a > s_led_peak) {
-+                s_led_peak += (a - s_led_peak) >> 2; // fast attack (~80us)
-+            } else {
-+                s_led_peak += (a - s_led_peak) >> 6; // slow decay (~1.3ms)
++            int16_t out = tx_audio_process((int16_t)mono);
++            // Keep the exact sample-rate envelope; update the physical PWM
++            // once per packet. Human-visible LED state needs only 1kHz.
++            if (vu) {
++                int32_t a = out < 0 ? -out : out;
++                peak += (a - peak) >> (a > peak ? 2 : 6);
 +            }
-+            tx_led_apply();
++            uint16_t head = s_ring_head;
++            uint16_t next = (uint16_t)((head + 1) & TX_RING_MASK);
++            if (next != s_ring_tail) {
++                s_ring[head] = out;
++                // Publish each sample: the higher-priority PWM IRQ may
++                // preempt this callback and must see samples as they arrive.
++                s_ring_head = next;
++                received++;
++            } else {
++                dropped++;
++            }
 +        }
-+
-+        uint16_t head = s_ring_head;
-+        uint16_t next = (uint16_t)((head + 1) & TX_RING_MASK);
-+        if (next != s_ring_tail) {
-+            s_ring[head] = out;
-+            s_ring_head = next;
-+            s_rx_frames++;
-+        } else {
-+            // ring full -> drop sample (host clock slightly ahead)
-+            s_ring_drops++;
-+        }
++        s_rx_frames += received;
++        s_ring_drops += dropped;
++        s_led_peak = peak;
++        tx_led_apply();
++    }
++    uint32_t elapsed = time_us_32() - started;
++    s_rx_packets++;
++    s_rx_total_us += elapsed;
++    if (elapsed > s_rx_max_us) {
++        s_rx_max_us = elapsed;
 +    }
 +    return true;
 +}
@@ -3211,10 +3353,10 @@ index 0000000..3c42b27
 +#endif // MICROPY_HW_TX
 diff --git a/ports/rp2/tx/tx_modulator.h b/ports/rp2/tx/tx_modulator.h
 new file mode 100644
-index 0000000..d1eae81
+index 0000000..f93acf1
 --- /dev/null
 +++ b/ports/rp2/tx/tx_modulator.h
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,256 @@
 +/*
 + * tx_modulator.h
 + *
@@ -3222,7 +3364,7 @@ index 0000000..d1eae81
 + *
 + * This connects three real-time pieces:
 + *   - the USB Audio (UAC1) receive path: PCM frames arrive from the host in
-+ *     the TinyUSB audio driver callback (soft IRQ / tud_task context);
++ *     the TinyUSB audio driver callback (USB hard IRQ on core 0);
 + *   - a fixed 48 kHz sample clock (PWM slice wrap interrupt) that pops one
 + *     mono sample per tick;
 + *   - the pico-fractional-pll library, whose pico_fractional_pll_set_freq_u32()
@@ -3409,6 +3551,8 @@ index 0000000..d1eae81
 +// Copy up to max of the most recent transmitted mono samples (chronological
 +// order, oldest first).  Returns the number of samples copied.
 +uint16_t tx_modulator_get_samples(int16_t *buf, uint16_t max);
++// Same recent-sample window, reduced in C without allocating a Python buffer.
++uint16_t tx_modulator_sample_peak(uint16_t max);
 +
 +// Ring buffer fill level in percent (0..100).  Useful to watch clock drift.
 +uint8_t tx_modulator_ring_level(void);
@@ -3455,10 +3599,14 @@ index 0000000..d1eae81
 +// 1s apart gives the true wrap rate (delta/1000 Hz) independent of the ISR.
 +uint32_t tx_modulator_pwm_ctr(void);
 +
-+// Measure the sample-ISR execution cost in microseconds (calls the handler
-+// 1000 times with interrupts off).  Should be a few microseconds; if it is
-+// tens of microseconds, the per-sample path is too slow.
++// Passive sample-ISR average in microseconds (one in 64 real interrupts).
++// Returns 0 before any timing sample; never advances modulation state.
 +uint32_t tx_modulator_isr_cost_us(void);
++
++// Snapshot: ISR sample count/total us/max us, USB packet count/total us/max us.
++// Maxima are since init; ISR maxima are sampled, USB times include PWM
++// preemption. Counters/totals wrap at 2^32; use unsigned deltas over a window.
++void tx_modulator_get_timing(uint32_t stats[6]);
 +
 +// Convenience getters for the tone generator state.
 +uint32_t tx_modulator_tone_hz(void);

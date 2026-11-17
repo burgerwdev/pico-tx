@@ -20,11 +20,11 @@ import time
 
 import pico_tx
 
-VERSION = "0.1.5"          # console release version (see release README)
+VERSION = "0.1.6"          # console release version (see release README)
 
 # SHA-256 of the firmware this console is shipped with
 # (release/firmware/picotx_firmware.uf2).  Shown by `ver`.
-FW_SHA256 = "011f4b55af5a6603769eae48af94634f6930bc1ba9e7cabc1c3f925d6ba92b4a"
+FW_SHA256 = "e68f3664313ee6ceff2bc45bf29f1c168aecf7d4a5394cc262cc79f187124ebe"
 
 # Project links shown by the `ver` command.
 PROJECT_URL = "https://git.sr.ht/~bytewolf/pico-tx"
@@ -237,7 +237,7 @@ HELP_CATEGORIES = [
     ]),
     ("debug", "status, meters and diagnostics", [
         ("status / s", "show all transmitter parameters"),
-        ("log", "live transmit log (Ctrl-C stops; 'log' resumes)"),
+        ("log", "live transmit log (input or Ctrl-C returns to prompt)"),
         ("vbar", "live audio level meter"),
         ("ring", "ring buffer fill %"),
         ("diag [s]", "ISR/RX rates + clock drift (default 1s, max 60)"),
@@ -461,8 +461,9 @@ diag [seconds] - measure ISR/RX rates and ring-buffer health (default 1 s).
   A longer window sharpens it: 'diag 10' is 10x finer than 'diag'.
   Example: diag 10""",
     "pwm": """\
-pwm - PWM slice-7 registers + measured ISR cost (diagnostics).
-  Expected: TOP=999, DIV=/1.0, clk_sys=48000000, ISR cost ~2-6 us.
+pwm - PWM slice-7 registers + passive IRQ timing (diagnostics).
+  Expected: TOP=999, DIV=/1.0, clk_sys=48000000, ~48000 ticks/s.
+  Reports sampled PWM ISR and USB packet times without advancing the engine.
   Example: pwm""",
     "cls": """\
 cls - clear the terminal screen (ANSI escape).  Example: cls""",
@@ -539,8 +540,8 @@ CMD_DETAILS.update({
     "service": """service [command...] | service off - run one console command at boot.
   The boot service never opens the live log (safe for a headless beacon).
   Example: service cw CQ DE PICO repeat 0""",
-    "log": """log - live transmit log (one line/s; Ctrl-C stops, 'log' resumes).
-  Auto-opened after cw/fsk/ook/psk/tone/chirp.
+    "log": """log - live transmit log (one line/s; input or Ctrl-C stops).
+  Sending returns immediately to tx>; type log to watch the transmission.
   Shows elapsed time, mode, carrier, RF state and mode-specific detail.
   In keyed modes, sym= shows the data that is on the air now. FSK, OOK, and
   PSK show the symbol byte as \\xNN (upper-case hex). CW shows the text
@@ -830,12 +831,7 @@ def start_ws2812_vu(pin):
             elif mode == 2:
                 np[0] = (255, 255, 255) if pico_tx.audio_active() else (0, 0, 0)
             else:  # mode 3: VU meter
-                raw = pico_tx.samples(256)
-                pk = 0
-                for v in array.array("h", raw):
-                    a = v if v >= 0 else -v
-                    if a > pk:
-                        pk = a
+                pk = sample_peak(256)
                 if pk > peak[0]:
                     peak[0] = pk
                 else:
@@ -931,11 +927,7 @@ def show_status():
 
 def _vu_bar(width=10, n=128):
     """Peak level bar from the most recent samples (FM audio path)."""
-    pk = 0
-    for v in array.array("h", pico_tx.samples(n)):
-        a = v if v >= 0 else -v
-        if a > pk:
-            pk = a
+    pk = sample_peak(n)
     filled = pk * width // 32768
     return "[" + "#" * filled + "." * (width - filled) + "]"
 
@@ -953,8 +945,7 @@ def _gap_txt():
 
 
 def show_log():
-    """Live transmit log until Ctrl-C.  Run `log` again to resume.
-    Auto-started after cw/fsk/ook/psk/tone/chirp.
+    """Live transmit log until input or Ctrl-C. Run `log` again to resume.
 
     Every mode shows mode, carrier, RF state and a mode detail.  Normal modes
     print one line per second; CW prints one line for each keyed character, so
@@ -965,17 +956,25 @@ def show_log():
     last_row = t0
     last_no = None
     u0, d0 = ring_stats()
-    print("tx log - Ctrl-C to stop")
+    poller = make_poller()
+    next_row = time.ticks_add(t0, 50 if pico_tx.mode() == "cw" else 1000)
+    print("tx log - type a command or Ctrl-C to return to the prompt")
     if LAST_TX:
         print("payload: %s" % LAST_TX)
     print("    t     mode   carrier         RF   detail")
     try:
         while True:
-            time.sleep_ms(50 if pico_tx.mode() == "cw" else 1000)
-            now = pico_tx.diag()[0]
+            if poller is not None and poller.poll(0):
+                # Preserve input for the prompt, including pasted commands.
+                break
+            time.sleep_ms(20)
             t = time.ticks_ms()
+            if time.ticks_diff(t, next_row) < 0:
+                continue
+            next_row = time.ticks_add(t, 50 if pico_tx.mode() == "cw" else 1000)
+            now = pico_tx.diag()[0]
             dt = time.ticks_diff(t, prev_t) or 1
-            isr = (now - prev_isr) * 1000 // dt
+            isr = counter_delta(now, prev_isr) * 1000 // dt
             prev_isr, prev_t = now, t
             el = time.ticks_diff(t, t0) / 1000.0
             mode = pico_tx.mode()
@@ -1018,8 +1017,8 @@ def show_log():
                 detail = "engine stopped"
             elif mode == "fm":
                 u, d = ring_stats()
-                du = (u - u0) if (u is not None and u0 is not None) else 0
-                dd = (d - d0) if (d is not None and d0 is not None) else 0
+                du = counter_delta(u, u0) if (u is not None and u0 is not None) else 0
+                dd = counter_delta(d, d0) if (d is not None and d0 is not None) else 0
                 u0, d0 = u, d
                 detail = "dev=%.1fk host=%s ring=%3d%% drift=+%d/-%d clips=%d %s" % (
                     pico_tx.deviation() / 1e3,
@@ -1041,7 +1040,8 @@ def show_log():
             last_row = t
             print("%6.1fs %-6s %-15s %-4s %s" % (el, mode, car, rf, detail))
     except KeyboardInterrupt:
-        print("(log stopped; type 'log' to resume)")
+        pass
+    print("(log stopped; type 'log' to resume)")
 
 
 def make_poller():
@@ -1049,12 +1049,6 @@ def make_poller():
     try:
         p = select.poll()
         p.register(sys.stdin, select.POLLIN)
-        # Drain any pending input so the first poll does not fire immediately.
-        while p.poll(0):
-            try:
-                sys.stdin.read(1)
-            except OSError:
-                pass
         return p
     except Exception:
         return None
@@ -1070,18 +1064,47 @@ def peak_of(raw):
     return pk
 
 
+def sample_peak(n=256):
+    """Use the allocation-free firmware meter; keep older builds usable."""
+    if hasattr(pico_tx, "sample_peak"):
+        return pico_tx.sample_peak(n)
+    return peak_of(pico_tx.samples(n))
+
+
+def counter_delta(now, before):
+    return (now - before) & 0xFFFFFFFF
+
+
+def timing_snapshot():
+    return pico_tx.timing() if hasattr(pico_tx, "timing") else None
+
+
+def show_timing(before, after):
+    if before is None or after is None:
+        print("IRQ timing: update firmware for passive timing")
+        return
+    for name, i in (("PWM ISR (1/64)", 0), ("USB audio packet", 3)):
+        count = counter_delta(after[i], before[i])
+        total = counter_delta(after[i + 1], before[i + 1])
+        if count:
+            print("%-18s: avg %.2f us, observed max %d us, %d samples"
+                  % (name, total / count, after[i + 2], count))
+        else:
+            print("%-18s: no samples in this window" % name)
+    print("Maxima since boot; USB time includes PWM preemption.")
+
+
 def write_stdout(s):
     """Write to stdout without depending on sys.stdout.flush() (MicroPython's
     TextIOWrapper has none; CDC writes are transmitted immediately anyway)."""
     sys.stdout.write(s)
-    try:
-        sys.stdout.flush()
-    except AttributeError:
-        pass
+    flush = getattr(sys.stdout, "flush", None)
+    if flush is not None:
+        flush()
 
 
 def vbar():
-    """Single-line audio level meter, refreshed at ~50 fps with \r redraw.
+    """Single-line audio level meter, sampled at ~50 fps with ANSI redraw.
     Shows the audio peak, the squelch threshold (T marker, when enabled) and
     the clip rate.  While the input is silent the refresh drops to ~2 fps and
     shows "silent" - this avoids constant USB CDC traffic, whose digital
@@ -1093,55 +1116,63 @@ def vbar():
     last_clips = pico_tx.clips()
     last_sec = next_frame
     clips_rate = 0
-    silent = False
-    while True:
-        if poller is not None and poller.poll(0):
-            try:
-                sys.stdin.readline()
-            except OSError:
-                pass
-            break
-        now = time.ticks_ms()
-        if now < next_frame:
-            time.sleep_ms(2)
-            continue
-        # Clip rate, once per second (delta of the firmware clip counter).
-        if now - last_sec >= 1000:
-            clips_rate = pico_tx.clips() - last_clips
-            last_clips += clips_rate
-            last_sec = now
-        raw = pico_tx.samples(256)
-        pk = peak_of(raw)
-        if pk > peak:
-            peak = pk
-        else:
-            peak = (peak * 7) // 8  # short trail so the bar follows the beat
-        if pk == 0:
-            # Silent: throttle to ~2 fps so the USB CDC stream (and the
-            # digital noise it couples into the RF) stays minimal.
-            if not silent:
-                silent = True
-                write_stdout("\rsilent (any key or Ctrl-C to stop)   ")
-            next_frame = now + 500
-            continue
-        silent = False
-        next_frame = now + 20  # ~50 fps
-        nbars = peak * 40 // 32768
-        thr = pico_tx.squelch()
-        thrpos = thr * 40 // 32768 if thr else -1
-        row = []
-        for i in range(40):
-            if i == thrpos:
-                row.append("T")
-            elif i < nbars:
-                row.append("#")
+    last_row = None
+    try:
+        # A visible block cursor otherwise travels across the meter on every
+        # carriage-return redraw. Always restore it, including on Ctrl-C.
+        write_stdout("\x1b[?25l")
+        while True:
+            if poller is not None and poller.poll(0):
+                try:
+                    sys.stdin.read(1)
+                except OSError:
+                    pass
+                break
+            now = time.ticks_ms()
+            remaining = time.ticks_diff(next_frame, now)
+            if remaining > 0:
+                time.sleep_ms(min(remaining, 20))
+                continue
+            # Clip rate, once per second (delta of the firmware clip counter).
+            if time.ticks_diff(now, last_sec) >= 1000:
+                clips = pico_tx.clips()
+                clips_rate = counter_delta(clips, last_clips)
+                last_clips = clips
+                last_sec = now
+            pk = sample_peak(256)
+            # Decay only the trail, never below the current sample. Otherwise
+            # a constant input alternates between full and decayed rows.
+            peak = max(pk, (peak * 7) // 8)
+            if pk == 0:
+                # Silent: throttle sampling to ~2 fps; unchanged rows need
+                # no USB CDC traffic at all.
+                row = "silent (any key or Ctrl-C to stop)"
+                next_frame = time.ticks_add(now, 500)
             else:
-                row.append("-")
-        write_stdout("\r[%s] %5d clips=%d" % ("".join(row), peak, clips_rate))
-    print()
+                next_frame = time.ticks_add(now, 20)  # ~50 fps
+                nbars = peak * 40 // 32768
+                thr = pico_tx.squelch()
+                thrpos = thr * 40 // 32768 if thr else -1
+                bar = []
+                for i in range(40):
+                    if i == thrpos:
+                        bar.append("T")
+                    elif i < nbars:
+                        bar.append("#")
+                    else:
+                        bar.append("-")
+                row = "[%s] %5d clips=%d" % ("".join(bar), peak, clips_rate)
+            if row != last_row:
+                # Overwrite first, then clear only the leftover suffix. Never
+                # blank the whole line before drawing: terminals can show
+                # that intermediate empty frame as a flash.
+                write_stdout("\r" + row + "\x1b[K")
+                last_row = row
+    finally:
+        write_stdout("\x1b[?25h\n")
 
 
-def do_command(line, autolog=True):
+def do_command(line, autolog=False):
     global AUDIO_ON, PREEMPH, SQUELCH_PCT, HARMONIC, TARGET_FREQ, DEV_EFF, SILENCE_MODE, TRIM_HZ
     global MODE, SERVICE, LAST_CHIRP, LAST_TX, LAST_CW_CHARS, LAST_CW_SEQ
     parts = line.split()
@@ -1671,15 +1702,19 @@ def do_command(line, autolog=True):
             print("ring buffer %d%% full" % pico_tx.ring_level())
         elif cmd == "pwm":
             top, div, csr, clk = pico_tx.pwm_info()
-            cost = pico_tx.isr_cost()
+            timing0 = timing_snapshot()
             i0 = pico_tx.diag()[0]
+            t0 = time.ticks_ms()
             time.sleep_ms(1000)
+            elapsed = time.ticks_diff(time.ticks_ms(), t0)
             i1 = pico_tx.diag()[0]
+            timing1 = timing_snapshot()
             print("clk_sys     : %d Hz" % clk)
             print("PWM slice7  : TOP=%d DIV=0x%04X CSR=0x%02X"
                   "  (INT=1 FRAC=0 -> /1.0, wrap 48kHz)" % (top, div, csr))
-            print("ISR cost    : ~%d us/call (expect ~2-6)" % cost)
-            print("ISR rate    : %d/s over 1s (expect ~48000)" % (i1 - i0))
+            show_timing(timing0, timing1)
+            print("ISR rate    : %.1f/s over %d ms (expect ~48000)"
+                  % (counter_delta(i1, i0) * 1000 / max(elapsed, 1), elapsed))
         elif cmd == "diag":
             # Optional window length: a longer window divides the 1-sample
             # quantisation of the counters, so the ppm estimate gets sharper
@@ -1692,12 +1727,16 @@ def do_command(line, autolog=True):
                 secs = max(1, min(60, v))
             i0, r0 = pico_tx.diag()
             u0, d0 = ring_stats()
+            timing0 = timing_snapshot()
+            t0 = time.ticks_ms()
             time.sleep_ms(secs * 1000)
+            elapsed = time.ticks_diff(time.ticks_ms(), t0) / 1000.0
             i1, r1 = pico_tx.diag()
             u1, d1 = ring_stats()
-            di, dr = i1 - i0, r1 - r0
-            print("window    : %d s, PWM ticks +%d (~%.0f/s over this window)"
-                  % (secs, di, di / secs))
+            timing1 = timing_snapshot()
+            di, dr = counter_delta(i1, i0), counter_delta(r1, r0)
+            print("window    : %.3f s, PWM ticks +%d (~%.0f/s over this window)"
+                  % (elapsed, di, di / max(elapsed, 0.001)))
             print("ISR ticks : %d -> %d   (+%d, expect ~%d)"
                   % (i0, i1, di, 48000 * secs))
             print("RX frames : %d -> %d   (+%d, expect ~%d while streaming)"
@@ -1705,7 +1744,7 @@ def do_command(line, autolog=True):
             if u1 is None:
                 print("ring drift: (firmware has no ring_stats; update the firmware)")
             else:
-                du, dd = u1 - u0, d1 - d0
+                du, dd = counter_delta(u1, u0), counter_delta(d1, d0)
                 print("Underflows: %d -> %d   (+%d, host clock slower than PWM)"
                       % (u0, u1, du))
                 print("Drops     : %d -> %d   (+%d, host clock faster than PWM)"
@@ -1721,6 +1760,7 @@ def do_command(line, autolog=True):
                           % ((du + dd) * 1e6 / max(di, 1), (du + dd) / secs))
             print("ring %d%% full, last ISR freq %.3f MHz"
                   % (pico_tx.ring_level(), pico_tx.current_freq() / 1e6))
+            show_timing(timing0, timing1)
         elif cmd == "sweep":
             vlo = parse_int(arg if arg is not None else str(lo), "sweep lo")
             vhi = parse_int(arg2 if arg2 is not None else str(hi), "sweep hi")
